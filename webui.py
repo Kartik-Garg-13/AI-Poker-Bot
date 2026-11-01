@@ -61,12 +61,23 @@ def serve(routes, port, page, open_browser=True):
 
 
 class Dashboard:
-    def __init__(self, title, port, open_browser=True):
+    def __init__(self, title, port, open_browser=True, options=None):
         self.lock = threading.Lock()
         self.start = time.time()
+        self.options = dict(options or {})
         self.state = {"title": title, "status": "starting", "progress": 0, "charts": {},
-                      "log": [], "hand": None, "network": None, "stats": {}}
-        serve({("GET", "/api/state"): self._get}, port, "train.html", open_browser)
+                      "log": [], "hand": None, "network": None, "stats": {}, "options": dict(self.options)}
+        serve({("GET", "/api/state"): self._get, ("POST", "/api/options"): self._set_options},
+              port, "train.html", open_browser)
+
+    def _set_options(self, body):
+        with self.lock:
+            for key, value in body.items():
+                if key not in self.options:
+                    raise KeyError(f"unknown option {key}")
+                self.options[key] = type(self.options[key])(value)
+            self.state["options"] = dict(self.options)
+            return {"options": self.options}
 
     def _get(self, _):
         with self.lock:

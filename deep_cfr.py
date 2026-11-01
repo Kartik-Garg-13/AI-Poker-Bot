@@ -48,12 +48,33 @@ class DeepCFR:
         self.strat_mem = Reservoir(memory, seed + 6)
         self.t = 0
         self.rng = random.Random(seed)
+        self.finite, self.bust_penalty = False, 0.5
+        self.session, self.busts = [stack, stack], [0, 0]
 
     def new_game(self):
-        lo, hi = self.stack_range
-        g = GameState([self.rng.randint(lo, hi), self.rng.randint(lo, hi)], self.rng.randrange(2), self.rng)
+        if self.finite:
+            if max(self.session) > 5 * self.stack:
+                self.session = [self.stack, self.stack]
+            for i in (0, 1):
+                if self.session[i] == 0:
+                    self.session[i] = self.stack
+                    self.busts[i] += 1
+            stacks = self.session[:]
+        else:
+            lo, hi = self.stack_range
+            stacks = [self.rng.randint(lo, hi), self.rng.randint(lo, hi)]
+        g = GameState(stacks, self.rng.randrange(2), self.rng)
         g.start_hand(self.sb, self.bb)
         return g
+
+    def step(self, p):
+        g = self.new_game()
+        real = g.clone() if self.finite else None
+        self.traverse(g, p)
+        if real is not None:
+            while not real.hand_over:
+                apply_abstract(real, sample_action(self.current_probs(real), self.rng))
+            self.session = real.stacks[:]
 
     def current_probs(self, g, x=None, mask=None):
         q = g.to_act
@@ -65,7 +86,8 @@ class DeepCFR:
 
     def traverse(self, g, p):
         if g.hand_over:
-            return g.net[p] / self.stack
+            busted = self.finite and g.stacks[p] == 0
+            return g.net[p] / self.stack - (self.bust_penalty if busted else 0.0)
         q = g.to_act
         x, mask = features(g, q), legal_mask(g)
         sigma = self.current_probs(g, x, mask)
@@ -145,10 +167,10 @@ def calling_station(g):
     return p
 
 
-def record_hand(probs_fn, hand_id, stack=200, rng=None):
+def record_hand(probs_fn, hand_id, stack=200, rng=None, stacks=None):
     names = ("Bot A", "Bot B")
     rng = rng or random.Random()
-    g = GameState([stack, stack], rng.randrange(2), rng)
+    g = GameState(list(stacks or [stack, stack]), rng.randrange(2), rng)
     g.start_hand(1, 2)
     hole = [[card_str(c) for c in h] for h in g.hole]
     events = []
@@ -175,7 +197,7 @@ def record_hand(probs_fn, hand_id, stack=200, rng=None):
     else:
         result = f"{winners[0]} wins {g.pot()} chips with {category_name(g.scores[g.winners[0]])}"
     return {"id": hand_id, "names": list(names), "hole": hole, "board": [], "pot": 3,
-            "stacks": [stack - (1 if i == g.button else 2) for i in (0, 1)], "button": g.button,
+            "stacks": [g.start_stacks[i] - (1 if i == g.button else 2) for i in (0, 1)], "button": g.button,
             "events": events, "result": result}
 
 

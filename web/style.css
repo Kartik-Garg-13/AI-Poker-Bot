@@ -99,6 +99,10 @@ input[type=range] { accent-color: var(--brass); }
 .meta-line { margin-top: 18px; padding: 10px 14px; background: var(--rail-raised); border-radius: var(--radius-sm); display: flex; flex-wrap: wrap; gap: 6px 20px;
   font-size: var(--t-body); color: var(--smoke); }
 .meta-line b { font-weight: 500; color: var(--ivory); }
+.option { margin-top: 18px; padding: 14px 16px; background: var(--rail-raised); border-radius: var(--radius-md); }
+.option .info { margin-top: 6px; }
+.switch { display: flex; gap: 10px; align-items: center; font-size: var(--t-body); color: var(--ivory); cursor: pointer; }
+.switch input { accent-color: var(--brass); width: 18px; height: 18px; }
 .empty { color: var(--smoke); font-size: var(--t-body); padding: 8px 0; }
 
 .table { position: relative; height: 390px; border-radius: 195px; background: var(--felt); border: 12px solid var(--walnut); }

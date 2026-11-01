@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--eval-hands", type=int, default=400, help="hands vs each baseline per eval")
     ap.add_argument("--stack", type=int, default=200, help="buy-in in chips (blinds 1/2); also the stack used for testing")
     ap.add_argument("--stacks", default="20,500", help="range of stacks dealt in self-play, in chips (20 = 10 big blinds)")
+    ap.add_argument("--finite", action="store_true", help="start with chips carried over between hands (the page checkbox can switch it)")
+    ap.add_argument("--bust-penalty", type=float, default=0.5, help="extra loss for going broke in finite mode, in buy-ins")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--port", type=int, default=8766)
     ap.add_argument("--no-browser", action="store_true")
@@ -33,12 +35,13 @@ def main():
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    dash = Dashboard("Hold'em - Deep CFR self-play", args.port, not args.no_browser)
+    dash = Dashboard("Hold'em - Deep CFR self-play", args.port, not args.no_browser, options={"reset_stacks": not args.finite})
     dash.set(info=f"Heads-up no-limit; self-play deals stacks of {args.stacks.split(',')[0]}-{args.stacks.split(',')[1]} chips so the bot learns short and deep play. Charts: lower loss = nets fit "
                   f"the regrets; win rate vs baselines should climb as it learns.")
     equity([0, 4], [])
     d = DeepCFR(stack=args.stack, stack_range=tuple(int(v) for v in args.stacks.split(",")), hidden=tuple(int(h) for h in args.hidden.split(",")),
                 memory=args.memory, seed=args.seed)
+    d.bust_penalty = args.bust_penalty
     start, old_strat = 0, None
     if out.exists() and not args.fresh:
         data = dict(np.load(out))
@@ -57,7 +60,8 @@ def main():
         if force or time.time() - last_hand[0] > 4:
             last_hand[0] = time.time()
             hand_id[0] += 1
-            dash.set(hand=record_hand(probs_fn, hand_id[0], rng=rng, stack=args.stack))
+            dash.set(hand=record_hand(probs_fn, hand_id[0], rng=rng, stack=args.stack,
+                                      stacks=d.session if d.finite else None))
 
     def show_net(net, name, mode="advantage"):
         dash.set(network=network_view(net, name, mode))
@@ -79,7 +83,11 @@ def main():
             d.t = it
             for p in (0, 1):
                 for k in range(args.traversals):
-                    d.traverse(d.new_game(), p)
+                    if d.finite == dash.options["reset_stacks"]:
+                        d.finite = not dash.options["reset_stacks"]
+                        dash.log("Chips now carry over between hands; going broke costs extra." if d.finite
+                                 else "Stacks now reset after every hand.")
+                    d.step(p)
                     total_trav += 1
                     if k % 20 == 0:
                         dash.set(status=f"iteration {it}/{end}: self-play traversals as P{p} "
@@ -98,7 +106,9 @@ def main():
                             "advantage samples": f"{d.adv_mem[0].seen + d.adv_mem[1].seen:,}",
                             "strategy samples": f"{d.strat_mem.seen:,}",
                             "vs random": f"{vs_rand:+.0f} bb/100", "vs calling station": f"{vs_call:+.0f} bb/100",
-                            "ETA": f"{el / (it - start) * (end - it) / 60:.0f} min"})
+                            "ETA": f"{el / (it - start) * (end - it) / 60:.0f} min",
+                            "stacks": (f"carried over: A {d.session[0]}, B {d.session[1]} · busts {d.busts[0]}/{d.busts[1]}"
+                                       if d.finite else "reset after every hand")})
             dash.log(f"iter {it}: vs random {vs_rand:+.0f} bb/100, vs calling station {vs_call:+.0f} bb/100")
             d.save(out, include_strategy=old_strat is not None)
     except KeyboardInterrupt:

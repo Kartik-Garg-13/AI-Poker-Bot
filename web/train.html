@@ -39,6 +39,10 @@
       <h2>Is it learning?</h2>
       <div id="stats"></div>
       <p class="info" id="info"></p>
+      <div class="option">
+        <label class="switch"><input type="checkbox" id="reset" checked> Reset stacks after every hand</label>
+        <p class="info">Untick to let chips carry over between self-play hands. A bot that goes broke buys back in, and going broke counts as an extra loss, so it learns to protect its stack.</p>
+      </div>
     </section>
     <section class="panel">
       <h2>Learning curves</h2>
@@ -63,7 +67,14 @@
 const $ = id => document.getElementById(id);
 let state = null, shownHand = 0, playing = false, lastNetSteps = -1, lastNetName = "";
 
+let optionSent = 0;
+$("reset").onchange = async () => {
+  optionSent = Date.now();
+  try { await api("/api/options", { reset_stacks: $("reset").checked }); } catch (e) { $("status").textContent = e.message; }
+};
+
 function renderStats(s) {
+  if (s.options && Date.now() - optionSent > 2000) $("reset").checked = s.options.reset_stacks;
   $("title").textContent = s.title;
   document.title = s.title;
   $("status").textContent = s.status;

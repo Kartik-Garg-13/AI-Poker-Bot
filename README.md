@@ -16,6 +16,10 @@ Train once: the bot is saved to `models/deepcfr_holdem.npz` and `play.py` loads 
 `train_deep_cfr.py` again continues from the saved bot and makes it stronger (`--fresh` starts over).
 Ctrl+C during training still saves a playable bot.
 
+The training page has a **Reset stacks after every hand** checkbox. Untick it (or start with `--finite`) and chips carry over
+between self-play hands, a broke bot buys back in, and going broke counts as an extra loss (`--bust-penalty`), so the
+bot learns to protect its stack. Ticked, every hand deals fresh stacks of 10-250 big blinds (`--stacks`).
+
 While you play, the bot profiles you (how often you fold to bets, how aggressive you are, how often your river
 bets are bluffs) and shifts its strategy to exploit it. The profile is saved in `models/opponent_profile.json`;
 the play page has a switch to turn adapting off and a "Forget me" button.
