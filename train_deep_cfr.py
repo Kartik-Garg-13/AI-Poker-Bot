@@ -63,7 +63,7 @@ def main():
         d.strat = MLP.from_arrays(data, "strat_") if "strat_W0" in data else MLP(d.adv[0].sizes, args.seed + 3)
         old_strat = MLP.from_arrays(data, "strat_") if "strat_W0" in data else None
         d.trained = [True, True]
-        start = int(data["meta"][3])
+        d.t = start = int(data["meta"][3])
         dash.log(f"Continuing the saved bot from iteration {start}. Use --fresh to start over.")
         if mem_path.exists():
             mem_t = d.load_memories(mem_path)
@@ -189,21 +189,22 @@ def main():
         dash.set(status=f"final: training average-strategy net ({step}/{steps})", progress=step / steps)
     d.train(d.strat, d.strat_mem, steps, args.batch, every=25, callback=on_strat)
 
-    def score(net):
-        probs = lambda g: normalize_policy(net.predict(features(g, g.to_act)[None])[0], legal_mask(g))
-        rand = {c: play_match(probs, random_bot, 1000, c, seed=12345) for c in (20, 60, 200)}
-        call = {c: play_match(probs, calling_station, 1000, c, seed=12345) for c in (20, 60, 200)}
-        return rand[200], call[200], sum(rand.values()) + sum(call.values())
+    def policy(net):
+        return lambda g: normalize_policy(net.predict(features(g, g.to_act)[None])[0], legal_mask(g))
 
-    dash.set(status="final: measuring the bot at 10, 30 and 100 big blinds deep")
-    vs_rand, vs_call, total = score(d.strat)
     if old_strat is not None:
-        old_rand, old_call, old_total = score(old_strat)
-        dash.log(f"Same 6,000 hands at 10/30/100bb: new bot {total:+.0f}, previous bot {old_total:+.0f} "
-                 f"(bb/100 summed over random + calling station).")
-        if old_total > total:
-            d.strat, vs_rand, vs_call = old_strat, old_rand, old_call
-            dash.log("The previous average strategy scored higher on the same hands, so it stays.")
+        dash.set(status="final: new bot vs previous bot, head to head at 10, 30 and 100 big blinds deep")
+        h2h = {c: play_match(policy(d.strat), policy(old_strat), 2000, c, seed=777) for c in (20, 60, 200)}
+        dash.log("Head to head over 2,000 duplicate hands each, new bot vs previous: "
+                 + ", ".join(f"{c // 2}bb {v:+.1f}" for c, v in h2h.items()) + " bb/100.")
+        if sum(h2h.values()) < 0:
+            d.strat = old_strat
+            dash.log("The previous bot won head to head, so it stays.")
+        else:
+            dash.log("The new bot won head to head, so it replaces the previous one.")
+    dash.set(status="final: measuring the bot against the baselines")
+    vs_rand = play_match(policy(d.strat), random_bot, 1000, 200, seed=12345)
+    vs_call = play_match(policy(d.strat), calling_station, 1000, 200, seed=12345)
     d.save(out)
     bot = BotPolicy(out)
     dash.log(f"Saved {out}. Final average strategy: vs random {vs_rand:+.0f} bb/100, "
