@@ -1,4 +1,5 @@
 import argparse
+import csv
 import random
 import time
 from pathlib import Path
@@ -42,7 +43,11 @@ def main():
     d = DeepCFR(stack=args.stack, stack_range=tuple(int(v) for v in args.stacks.split(",")), hidden=tuple(int(h) for h in args.hidden.split(",")),
                 memory=args.memory, seed=args.seed)
     d.bust_penalty = args.bust_penalty
-    start, old_strat = 0, None
+    start, old_strat, restored = 0, None, False
+    mem_path = out.with_name(out.stem + "_memory.npz")
+    hist_path = out.with_name("training_history.csv")
+    if args.fresh and hist_path.exists():
+        hist_path.unlink()
     if out.exists() and not args.fresh:
         data = dict(np.load(out))
         d.adv = [MLP.from_arrays(data, f"adv{p}_") for p in (0, 1)]
@@ -51,6 +56,20 @@ def main():
         d.trained = [True, True]
         start = int(data["meta"][3])
         dash.log(f"Continuing the saved bot from iteration {start}. Use --fresh to start over.")
+        if mem_path.exists():
+            mem_t = d.load_memories(mem_path)
+            restored = True
+            dash.log(f"Loaded {d.adv_mem[0].size + d.adv_mem[1].size + d.strat_mem.size:,} training memories "
+                     f"saved at iteration {mem_t}, so training picks up exactly where it stopped.")
+        if hist_path.exists():
+            with open(hist_path, newline="") as f:
+                for row in csv.DictReader(f):
+                    i = int(row["iteration"])
+                    dash.point("Win rate vs baselines (bb/100)", "vs random bot", i, float(row["vs_random"]))
+                    dash.point("Win rate vs baselines (bb/100)", "vs calling station", i, float(row["vs_calling"]))
+                    for p in (0, 1):
+                        if row[f"loss_p{p}"]:
+                            dash.point("Advantage-net loss", f"P{p} net", i, float(row[f"loss_p{p}"]), log=True)
     end = start + args.iters
     rng = random.Random(args.seed + 99)
     hand_id = [0]
@@ -66,8 +85,11 @@ def main():
     def show_net(net, name, mode="advantage"):
         dash.set(network=network_view(net, name, mode))
 
+    last_loss = [None, None]
+
     def on_train(p):
         def cb(step, loss):
+            last_loss[p] = loss
             dash.point("Advantage-net loss", f"P{p} net", d.t + step / args.train_steps, loss, log=True)
             show_net(d.adv[p], f"Advantage net P{p} - iteration {d.t}, step {step}/{args.train_steps}")
             dash.set(status=f"iteration {d.t}/{end}: training P{p}'s advantage net "
@@ -111,15 +133,29 @@ def main():
                                        if d.finite else "reset after every hand")})
             dash.log(f"iter {it}: vs random {vs_rand:+.0f} bb/100, vs calling station {vs_call:+.0f} bb/100")
             d.save(out, include_strategy=old_strat is not None)
+            new_file = not hist_path.exists()
+            with open(hist_path, "a", newline="") as f:
+                w = csv.writer(f)
+                if new_file:
+                    w.writerow(["iteration", "time", "vs_random", "vs_calling", "loss_p0", "loss_p1", "stacks", "traversals_per_sec"])
+                w.writerow([it, time.strftime("%Y-%m-%d %H:%M:%S"), round(vs_rand, 1), round(vs_call, 1),
+                            f"{last_loss[0]:.5f}" if last_loss[0] is not None else "",
+                            f"{last_loss[1]:.5f}" if last_loss[1] is not None else "",
+                            "carried over" if d.finite else "reset", round(total_trav / el, 1)])
+            if it % 5 == 0:
+                dash.set(status=f"iteration {it}/{end}: saving training memories")
+                d.save_memories(mem_path)
     except KeyboardInterrupt:
         dash.log("Interrupted - training the average-strategy net on what we have (Ctrl+C again to quit)")
 
     if d.strat_mem.size == 0:
         dash.log("Nothing learned yet - not saving.")
         return
+    dash.set(status="saving training memories")
+    d.save_memories(mem_path)
     done = d.t - start
-    steps = args.strategy_steps if start == 0 else max(300, round(args.strategy_steps * done / d.t))
-    if old_strat is not None:
+    steps = args.strategy_steps if start == 0 or restored else max(300, round(args.strategy_steps * done / d.t))
+    if old_strat is not None and not restored:
         n, share = d.strat_mem.size, start * (start + 1) / (d.t * (d.t + 1))
         X, M = d.strat_mem.X[:n], d.strat_mem.M[:n]
         p = np.maximum(old_strat.predict(X), 0) * M

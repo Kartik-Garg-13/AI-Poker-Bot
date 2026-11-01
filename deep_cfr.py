@@ -1,3 +1,4 @@
+import os
 import random
 
 import numpy as np
@@ -34,6 +35,17 @@ class Reservoir:
     def batch(self, k):
         i = self.rng.integers(0, self.size, k)
         return self.X[i], self.Y[i], self.M[i], self.T[i]
+
+    def arrays(self, prefix):
+        n = self.size
+        return {f"{prefix}X": self.X[:n].astype(np.float16), f"{prefix}Y": self.Y[:n].astype(np.float16),
+                f"{prefix}M": self.M[:n].astype(np.uint8), f"{prefix}T": self.T[:n], f"{prefix}seen": np.array(self.seen)}
+
+    def load(self, data, prefix):
+        n = min(len(data[f"{prefix}X"]), self.cap)
+        self.X[:n], self.Y[:n] = data[f"{prefix}X"][:n], data[f"{prefix}Y"][:n]
+        self.M[:n], self.T[:n] = data[f"{prefix}M"][:n], data[f"{prefix}T"][:n]
+        self.size, self.seen = n, max(int(data[f"{prefix}seen"]), n)
 
 
 class DeepCFR:
@@ -111,6 +123,21 @@ class DeepCFR:
             losses.append(net.train_step(X, Y, M, T / T.mean(), lr))
             if callback and every and (s + 1) % every == 0:
                 callback(s + 1, float(np.mean(losses[-every:])))
+
+    def save_memories(self, path):
+        d = {"t": np.array(self.t)}
+        for name, mem in (("adv0_", self.adv_mem[0]), ("adv1_", self.adv_mem[1]), ("strat_", self.strat_mem)):
+            d.update(mem.arrays(name))
+        tmp = f"{path}.tmp"
+        with open(tmp, "wb") as f:
+            np.savez_compressed(f, **d)
+        os.replace(tmp, path)
+
+    def load_memories(self, path):
+        data = np.load(path)
+        for name, mem in (("adv0_", self.adv_mem[0]), ("adv1_", self.adv_mem[1]), ("strat_", self.strat_mem)):
+            mem.load(data, name)
+        return int(data["t"])
 
     def save(self, path, include_strategy=True):
         d = {}

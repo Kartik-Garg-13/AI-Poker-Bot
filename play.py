@@ -1,5 +1,7 @@
 import argparse
+import json
 import random
+import re
 import sys
 import threading
 import time
@@ -15,6 +17,7 @@ from search import resolve_river
 from webui import serve
 
 HUMAN, BOT = 0, 1
+HISTORY = Path(__file__).parent / "models" / "hand_history.jsonl"
 
 
 def signed(x):
@@ -29,6 +32,12 @@ class Session:
         self.lock = threading.RLock()
         self.hands, self.net, self.g = 0, 0, None
         self.stacks, self.buyins = [self.stack, self.stack], [1, 1]
+        self.all_hands, self.all_net = 0, 0
+        if HISTORY.exists():
+            for line in HISTORY.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    self.all_hands += 1
+                    self.all_net += json.loads(line)["net"]
         self.opp, self.adapt = Opponent(), True
         self.new_hand()
 
@@ -145,6 +154,18 @@ class Session:
             self.result += ". You are out of chips."
         elif self.stacks[BOT] == 0:
             self.result += f". The bot is out of chips and buys back in for {self.stack}."
+        self.all_hands += 1
+        self.all_net += g.net[HUMAN]
+        record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "button": "you" if g.button == HUMAN else "bot",
+                  "you": [card_str(c) for c in g.hole[HUMAN]], "bot": [card_str(c) for c in g.hole[BOT]],
+                  "board": [card_str(c) for c in g.board],
+                  "actions": [("You " + re.sub(r"^(\w+)s\b", r"\1", e["text"]) if e["actor"] == HUMAN else "Bot " + e["text"])
+                              for e in self.events if "actor" in e],
+                  "result": self.result, "net": g.net[HUMAN], "stacks_after": g.stacks[:],
+                  "bot_decisions": [{"street": b["street"], "chose": b["chosen"], "probs": b["probs"]} for b in self.bot_log]}
+        HISTORY.parent.mkdir(exist_ok=True)
+        with open(HISTORY, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
 
     def _view(self):
         g = self.g
@@ -169,6 +190,7 @@ class Session:
                       "your win rate": f"{signed(rate)} bb/100", "your stack": f"{self.stacks[HUMAN]} chips",
                       "bot stack": f"{self.stacks[BOT]} chips",
                       "buy-ins": f"you {self.buyins[HUMAN]}, bot {self.buyins[BOT]}",
+                      "all-time": f"{self.all_hands} hands, {signed(self.all_net)} chips",
                       "river search": "on" if self.search else "off", "bot trained": f"{self.bot.t} iterations"},
             "can_rebuy": g.hand_over and self.stacks[HUMAN] == 0, "buyin": self.stack,
             "profile": self.opp.summary(), "adapt": self.adapt,

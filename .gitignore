@@ -1,4 +1,7 @@
 __pycache__/
 models/opponent_profile.json
+models/*_memory.npz
+models/*.tmp
+models/hand_history.jsonl
 submission/
 .taste-skill/
