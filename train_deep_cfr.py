@@ -1,5 +1,6 @@
 import argparse
 import csv
+import json
 import random
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ def main():
     ap.add_argument("--stacks", default="20,500", help="range of stacks dealt in self-play, in chips (20 = 10 big blinds)")
     ap.add_argument("--finite", action="store_true", help="start with chips carried over between hands (the page checkbox can switch it)")
     ap.add_argument("--bust-penalty", type=float, default=0.5, help="extra loss for going broke in finite mode, in buy-ins")
+    ap.add_argument("--human-share", type=float, default=0.2, help="share of self-play hands started from spots in hands people played on the play page")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--port", type=int, default=8766)
     ap.add_argument("--no-browser", action="store_true")
@@ -42,10 +44,17 @@ def main():
     equity([0, 4], [])
     d = DeepCFR(stack=args.stack, stack_range=tuple(int(v) for v in args.stacks.split(",")), hidden=tuple(int(h) for h in args.hidden.split(",")),
                 memory=args.memory, seed=args.seed)
-    d.bust_penalty = args.bust_penalty
+    d.bust_penalty, d.human_share = args.bust_penalty, args.human_share
     start, old_strat, restored = 0, None, False
     mem_path = out.with_name(out.stem + "_memory.npz")
     hist_path = out.with_name("training_history.csv")
+    human_path = out.with_name("hand_history.jsonl")
+
+    def load_human():
+        if not human_path.exists():
+            return []
+        rows = (json.loads(line) for line in human_path.read_text(encoding="utf-8").splitlines() if line.strip())
+        return [r for r in rows if "moves" in r]
     if args.fresh and hist_path.exists():
         hist_path.unlink()
     if out.exists() and not args.fresh:
@@ -103,6 +112,12 @@ def main():
     try:
         for it in range(start + 1, end + 1):
             d.t = it
+            if args.human_share > 0:
+                hands = load_human()
+                if len(hands) != len(d.human_hands):
+                    dash.log(f"Practising from {len(hands)} hands played against people "
+                             f"({args.human_share:.0%} of self-play starts from those spots).")
+                d.human_hands = hands
             for p in (0, 1):
                 for k in range(args.traversals):
                     if d.finite == dash.options["reset_stacks"]:
@@ -127,6 +142,7 @@ def main():
                             "traversals/sec": f"{total_trav / el:.1f}",
                             "advantage samples": f"{d.adv_mem[0].seen + d.adv_mem[1].seen:,}",
                             "strategy samples": f"{d.strat_mem.seen:,}",
+                            "hands vs people": len(d.human_hands),
                             "vs random": f"{vs_rand:+.0f} bb/100", "vs calling station": f"{vs_call:+.0f} bb/100",
                             "ETA": f"{el / (it - start) * (end - it) / 60:.0f} min",
                             "stacks": (f"carried over: A {d.session[0]}, B {d.session[1]} · busts {d.busts[0]}/{d.busts[1]}"
@@ -155,14 +171,16 @@ def main():
     d.save_memories(mem_path)
     done = d.t - start
     steps = args.strategy_steps if start == 0 or restored else max(300, round(args.strategy_steps * done / d.t))
-    if old_strat is not None and not restored:
-        n, share = d.strat_mem.size, start * (start + 1) / (d.t * (d.t + 1))
+    first = int(d.strat_mem.T[:d.strat_mem.size].min())
+    share = (first - 1) * first / (d.t * (d.t + 1))
+    if old_strat is not None and share > 0:
+        n = d.strat_mem.size
         X, M = d.strat_mem.X[:n], d.strat_mem.M[:n]
         p = np.maximum(old_strat.predict(X), 0) * M
         total = p.sum(1, keepdims=True)
         p = np.where(total > 0, p / np.where(total > 0, total, 1), M / M.sum(1, keepdims=True))
         d.strat_mem.Y[:n] = share * p + (1 - share) * d.strat_mem.Y[:n]
-        dash.log(f"Blending in the saved average strategy ({share:.0%} weight for iterations 1-{start}).")
+        dash.log(f"Blending in the saved average strategy ({share:.0%} weight for iterations 1-{first - 1}).")
     dash.log(f"Training the average-strategy net ({steps} steps). This is the policy that plays.")
 
     def on_strat(step, loss):

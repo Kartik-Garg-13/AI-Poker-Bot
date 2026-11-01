@@ -62,6 +62,7 @@ class DeepCFR:
         self.rng = random.Random(seed)
         self.finite, self.bust_penalty = False, 0.5
         self.session, self.busts = [stack, stack], [0, 0]
+        self.human_hands, self.human_share = [], 0.2
 
     def new_game(self):
         if self.finite:
@@ -79,7 +80,22 @@ class DeepCFR:
         g.start_hand(self.sb, self.bb)
         return g
 
+    def human_game(self):
+        h = self.rng.choice(self.human_hands)
+        g = GameState(h["start_stacks"], h["button_seat"], self.rng)
+        hole, board = h["deal"]["hole"], h["deal"]["board"]
+        dealt = [hole[0][0], hole[1][0], hole[0][1], hole[1][1], *board]
+        g.deck = [c for c in g.deck if c not in dealt] + dealt[::-1]
+        g.start_hand(self.sb, self.bb)
+        for action, amount in h["moves"][:self.rng.randrange(len(h["moves"]))]:
+            g.apply_action(action, amount)
+        self.rng.shuffle(g.deck)
+        return g
+
     def step(self, p):
+        if self.human_hands and self.rng.random() < self.human_share:
+            self.traverse(self.human_game(), p)
+            return
         g = self.new_game()
         real = g.clone() if self.finite else None
         self.traverse(g, p)

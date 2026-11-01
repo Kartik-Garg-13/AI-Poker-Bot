@@ -52,7 +52,7 @@ class Session:
             self.g = GameState(self.stacks[:], self.hands % 2, self.rng)
             self.g.start_hand(self.bot.sb, self.bot.bb)
             self.start = {"board": [], "pot": self.g.pot(), "stacks": self._behind(), "bets": self.g.street_bet[:]}
-            self.events, self.decisions, self.bot_log = [], [], []
+            self.events, self.decisions, self.bot_log, self.moves = [], [], [], []
             self.result = None
             self.vpip = self.river_bet = False
             self._bot_moves()
@@ -102,6 +102,7 @@ class Session:
             self.vpip |= g.street == 0 and action in ("call", "raise")
             self.river_bet |= g.street == 3 and action == "raise"
         g.apply_action(action, amount)
+        self.moves.append([action, amount])
         self.decisions.append((snap, p, abstract))
         self.events.append({"actor": p, "text": text, "board": [card_str(c) for c in g.board[:seen]],
                             "pot": g.pot(), "stacks": self._behind(),
@@ -162,6 +163,8 @@ class Session:
                   "actions": [("You " + re.sub(r"^(\w+)s\b", r"\1", e["text"]) if e["actor"] == HUMAN else "Bot " + e["text"])
                               for e in self.events if "actor" in e],
                   "result": self.result, "net": g.net[HUMAN], "stacks_after": g.stacks[:],
+                  "start_stacks": g.start_stacks[:], "button_seat": g.button, "moves": self.moves,
+                  "deal": {"hole": [list(h) for h in g.hole], "board": list(g.board)},
                   "bot_decisions": [{"street": b["street"], "chose": b["chosen"], "probs": b["probs"]} for b in self.bot_log]}
         HISTORY.parent.mkdir(exist_ok=True)
         with open(HISTORY, "a", encoding="utf-8") as f:
