@@ -51,9 +51,9 @@ class MLP:
     @classmethod
     def from_arrays(cls, data, prefix):
         n = sum(1 for k in data if k.startswith(prefix + "W"))
-        W = [data[f"{prefix}W{i}"] for i in range(n)]
+        W = [np.array(data[f"{prefix}W{i}"]) for i in range(n)]
         net = cls([W[0].shape[0]] + [w.shape[1] for w in W])
-        net.W, net.b = W, [data[f"{prefix}b{i}"] for i in range(n)]
+        net.W, net.b = W, [np.array(data[f"{prefix}b{i}"]) for i in range(n)]
         return net
 
 

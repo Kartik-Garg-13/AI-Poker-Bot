@@ -37,8 +37,9 @@ class Reservoir:
 
 
 class DeepCFR:
-    def __init__(self, stack=200, sb=1, bb=2, hidden=(32, 32), memory=400_000, seed=0):
+    def __init__(self, stack=200, sb=1, bb=2, hidden=(32, 32), memory=400_000, seed=0, stack_range=None):
         self.stack, self.sb, self.bb = stack, sb, bb
+        self.stack_range = stack_range or (stack, stack)
         sizes = [N_FEATURES, *hidden, N_ACTIONS]
         self.adv = [MLP(sizes, seed + 1), MLP(sizes, seed + 2)]
         self.strat = MLP(sizes, seed + 3)
@@ -49,7 +50,8 @@ class DeepCFR:
         self.rng = random.Random(seed)
 
     def new_game(self):
-        g = GameState([self.stack, self.stack], self.rng.randrange(2), self.rng)
+        lo, hi = self.stack_range
+        g = GameState([self.rng.randint(lo, hi), self.rng.randint(lo, hi)], self.rng.randrange(2), self.rng)
         g.start_hand(self.sb, self.bb)
         return g
 

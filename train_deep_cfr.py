@@ -23,7 +23,8 @@ def main():
     ap.add_argument("--hidden", default="64,64,64", help="hidden layer sizes")
     ap.add_argument("--memory", type=int, default=400_000, help="reservoir size per memory")
     ap.add_argument("--eval-hands", type=int, default=400, help="hands vs each baseline per eval")
-    ap.add_argument("--stack", type=int, default=200, help="starting stack in chips (blinds 1/2)")
+    ap.add_argument("--stack", type=int, default=200, help="buy-in in chips (blinds 1/2); also the stack used for testing")
+    ap.add_argument("--stacks", default="20,500", help="range of stacks dealt in self-play, in chips (20 = 10 big blinds)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--port", type=int, default=8766)
     ap.add_argument("--no-browser", action="store_true")
@@ -33,10 +34,10 @@ def main():
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     dash = Dashboard("Hold'em - Deep CFR self-play", args.port, not args.no_browser)
-    dash.set(info=f"Heads-up no-limit, {args.stack // 2}bb deep. Charts: lower loss = nets fit "
+    dash.set(info=f"Heads-up no-limit; self-play deals stacks of {args.stacks.split(',')[0]}-{args.stacks.split(',')[1]} chips so the bot learns short and deep play. Charts: lower loss = nets fit "
                   f"the regrets; win rate vs baselines should climb as it learns.")
     equity([0, 4], [])
-    d = DeepCFR(stack=args.stack, hidden=tuple(int(h) for h in args.hidden.split(",")),
+    d = DeepCFR(stack=args.stack, stack_range=tuple(int(v) for v in args.stacks.split(",")), hidden=tuple(int(h) for h in args.hidden.split(",")),
                 memory=args.memory, seed=args.seed)
     start, old_strat = 0, None
     if out.exists() and not args.fresh:
@@ -126,26 +127,27 @@ def main():
 
     def score(net):
         probs = lambda g: normalize_policy(net.predict(features(g, g.to_act)[None])[0], legal_mask(g))
-        return (play_match(probs, random_bot, 2000, args.stack, seed=12345),
-                play_match(probs, calling_station, 2000, args.stack, seed=12345))
+        rand = {c: play_match(probs, random_bot, 1000, c, seed=12345) for c in (20, 60, 200)}
+        call = {c: play_match(probs, calling_station, 1000, c, seed=12345) for c in (20, 60, 200)}
+        return rand[200], call[200], sum(rand.values()) + sum(call.values())
 
-    dash.set(status="final: measuring the bot over 4,000 hands")
-    vs_rand, vs_call = score(d.strat)
+    dash.set(status="final: measuring the bot at 10, 30 and 100 big blinds deep")
+    vs_rand, vs_call, total = score(d.strat)
     if old_strat is not None:
-        old_rand, old_call = score(old_strat)
-        dash.log(f"Same 4,000 hands: new bot {vs_rand + vs_call:+.0f}, previous bot {old_rand + old_call:+.0f} "
-                 f"(bb/100, random + calling station).")
-        if old_rand + old_call > vs_rand + vs_call:
+        old_rand, old_call, old_total = score(old_strat)
+        dash.log(f"Same 6,000 hands at 10/30/100bb: new bot {total:+.0f}, previous bot {old_total:+.0f} "
+                 f"(bb/100 summed over random + calling station).")
+        if old_total > total:
             d.strat, vs_rand, vs_call = old_strat, old_rand, old_call
             dash.log("The previous average strategy scored higher on the same hands, so it stays.")
     d.save(out)
     bot = BotPolicy(out)
     dash.log(f"Saved {out}. Final average strategy: vs random {vs_rand:+.0f} bb/100, "
-             f"vs calling station {vs_call:+.0f} bb/100 (2000 duplicate hands each)")
+             f"vs calling station {vs_call:+.0f} bb/100 (100bb deep)")
     dash.log("Now play it:  python play.py")
     dash.set(status="done - watching the final bot play itself (Ctrl+C to quit)", progress=1,
              stats={"vs random": f"{vs_rand:+.0f} bb/100", "vs calling station": f"{vs_call:+.0f} bb/100",
-                    "measured on": "2,000 duplicate hands each", "iterations trained": d.t,
+                    "measured on": "1,000 duplicate hands each, 100bb deep", "iterations trained": d.t,
                     "saved to": str(out)})
     try:
         while True:
