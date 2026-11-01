@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Network Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Inside the bot's brain</h1>
+  <select id="which"></select>
+  <span class="status">Every line is a connection, every circle a neuron. Blue pushes an output up, coral pushes it down.
+    Hover a neuron to trace it, click to pin, drag the sliders to invent a hand.</span>
+</header>
+<main style="grid-template-columns: 1fr">
+  <section class="panel">
+    <h2 id="name"></h2>
+    <div id="viz"></div>
+  </section>
+</main>
+<script src="poker.js"></script>
+<script src="netviz.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let viz;
+api("/api/nets").then(({ nets }) => {
+  viz = new NetViz($("viz"), Math.max(640, window.innerHeight - 330));
+  $("which").innerHTML = nets.map((n, i) => `<option value="${i}">${esc(n.name.split(" - ")[0])}</option>`).join("");
+  const pick = () => { const n = nets[+$("which").value]; $("name").textContent = n.name; viz.setNet(n); };
+  $("which").onchange = pick;
+  pick();
+});
+</script>
+</body>
+</html>

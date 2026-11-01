@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Play the Poker Bot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>
+  .controls { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+  .controls .row button { min-width: 112px; min-height: 48px; }
+  #sizing input[type=range] { flex: 1; min-width: 140px; }
+  #sizing input[type=number] { width: 96px; }
+  #presets button { min-height: 36px; padding: 0 14px; font-size: var(--t-small); }
+  #thinking { color: var(--brass); font-size: var(--t-small); min-height: 22px; text-align: center; }
+  .botdec { padding: 14px; background: var(--rail-raised); border-radius: var(--radius-md); }
+  .botdec + .botdec { margin-top: 8px; }
+  .botdec .meta { font-size: var(--t-body); color: var(--smoke); margin-top: 2px; }
+  .botdec .adapt { font-size: var(--t-body); color: var(--brass); margin-top: 6px; }
+  .trait { display: grid; grid-template-columns: 1fr 120px 56px; gap: 14px; align-items: center; padding: 10px 0; font-size: var(--t-body); }
+  .trait .gauge { position: relative; height: 8px; border-radius: 999px; background: var(--rail-raised); }
+  .trait .gauge i { position: absolute; top: -3px; width: 3px; height: 14px; border-radius: 2px; background: var(--smoke); }
+  .trait .gauge b { position: absolute; top: -3px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--brass); }
+  .trait .pct { font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+  .trait .sub { color: var(--smoke); }
+  .switch { display: flex; gap: 8px; align-items: center; font-size: var(--t-body); color: var(--chalk); cursor: pointer; }
+  .switch input { accent-color: var(--brass); width: 18px; height: 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Hold'em vs the bot</h1>
+  <span class="status" id="status"></span>
+</header>
+<main>
+  <div class="col">
+    <section class="panel">
+      <div id="table"></div>
+      <div class="result" id="result"></div>
+      <div id="thinking"></div>
+      <div class="controls">
+        <div class="row">
+          <button class="danger" id="fold">Fold</button>
+          <button id="call">Check</button>
+          <button class="primary" id="raise">Raise</button>
+          <button id="next" class="primary hidden">Next hand</button>
+        </div>
+        <div class="row" id="sizing">
+          <input type="range" id="amt" aria-label="Bet size">
+          <input type="number" id="amtn" aria-label="Bet size in chips">
+          <span id="presets" class="row"></span>
+        </div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>This hand</h2>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+  <div class="col">
+    <section class="panel" aria-label="Your session">
+      <div id="stats"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>What the bot has learned about you</h2>
+        <label class="switch"><input type="checkbox" id="adapt" checked> Adapt to my play</label>
+      </div>
+      <div id="profile"></div>
+      <div class="row" style="justify-content:space-between; margin-top:12px">
+        <span class="info" style="margin:0">The dot is you, the tick is a typical player. Saved between sessions.</span>
+        <button class="ghost" id="forget">Forget me</button>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Inside the bot's head</h2>
+      <p class="info" id="about" style="margin:0 0 12px"></p>
+      <div id="botlog" class="log" style="max-height:480px"></div>
+    </section>
+  </div>
+</main>
+<script src="poker.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let view = null, shown = 0, busy = false;
+
+function tableState(v, upto) {
+  const done = upto >= v.events.length;
+  const t = { names: ["You", "Bot"], hole: done ? v.hole : [v.hole[0], null], button: v.button,
+              top: 1, bubbles: [null, null], active: null, ...v.start };
+  for (const e of v.events.slice(0, upto)) {
+    Object.assign(t, { board: e.board, pot: e.pot, stacks: e.stacks, bets: e.bets, bubbles: [null, null] });
+    if (!e.deal) t.bubbles[e.actor] = e.actor === 0 ? youVerb(e.text) : e.text;
+  }
+  if (done) Object.assign(t, { board: v.board, pot: v.pot, stacks: v.stacks, bets: v.over ? [0, 0] : v.bets, active: v.to_act });
+  return t;
+}
+
+const youVerb = s => s.replace(/^(\w+)s\b/, "$1");
+
+function renderLog(v, upto) {
+  const lines = v.events.slice(0, upto).map(e => e.deal
+    ? `<div class="deal">${esc(e.deal)}: ${e.board.join(" ")}</div>`
+    : `<div class="ev"><b>${e.actor === 0 ? "You" : "Bot"}</b> ${esc(e.actor === 0 ? youVerb(e.text) : e.text)}</div>`).join("") +
+    (v.over && upto >= v.events.length ? `<div class="deal">${esc(v.result)}</div>` : "");
+  $("log").innerHTML = lines || '<div class="empty">Blinds are in. Your move or the bot\'s is coming up.</div>';
+  $("log").scrollTop = 1e9;
+}
+
+function renderControls(v) {
+  const mine = !!v.legal && !busy;
+  $("next").classList.toggle("hidden", !v.over || busy);
+  ["fold", "call", "raise"].forEach(id => $(id).classList.toggle("hidden", v.over));
+  $("sizing").classList.toggle("hidden", v.over || !mine || !v.legal.actions.includes("raise") || v.legal.min === v.legal.max);
+  if (!mine) { ["fold", "call", "raise"].forEach(id => $(id).disabled = true); return; }
+  const L = v.legal;
+  $("fold").disabled = !L.actions.includes("fold");
+  $("call").disabled = false;
+  $("call").textContent = L.actions.includes("call") ? `Call ${L.call}` : "Check";
+  $("raise").disabled = !L.actions.includes("raise");
+  if (L.actions.includes("raise")) {
+    const a = $("amt"), n = $("amtn");
+    if (+a.min !== L.min || +a.max !== L.max) {
+      a.min = n.min = L.min; a.max = n.max = L.max; a.value = n.value = L.presets["1/2 pot"] || L.min;
+    }
+    $("raise").textContent = (v.bets[0] === 0 && v.bets[1] === 0 ? "Bet " : "Raise to ") + n.value;
+    $("presets").innerHTML = Object.entries(L.presets).map(([k, x]) => `<button data-x="${x}">${k}</button>`).join("");
+    $("presets").querySelectorAll("button").forEach(b => b.onclick = () => { a.value = n.value = b.dataset.x; renderControls(view); });
+  }
+}
+
+function renderBot(v) {
+  if (!v.over) {
+    $("botlog").innerHTML = v.bot_log.length
+      ? v.bot_log.map(b => `<div class="botdec"><b>${esc(b.street)}</b> · bot ${esc(b.text)}<div class="meta">Reasoning is revealed when the hand ends.</div></div>`).join("")
+      : '<div class="empty">No bot decisions yet this hand.</div>';
+    return;
+  }
+  $("botlog").innerHTML = `<div class="deal">Bot held ${v.hole[1].join(" ")}</div>` + (v.bot_log.map(b => {
+    const s = b.search ? `<div class="meta">River re-solved live: ${b.search.iterations} CFR+ iterations over ${b.search.range_size}-hand ranges,
+      ${b.search.exploitability_pct_pot}% of pot left exploitable. Your range's average equity ≈ ${b.search.opp_strength}.</div>` : "";
+    const adapt = (b.adapt || []).map(n => `<div class="adapt">Adapting: ${esc(n)}</div>`).join("");
+    return `<div class="botdec"><b>${esc(b.street)}</b> · bot ${esc(b.text)}
+      <div class="meta">Equity estimate ${(100 * b.equity).toFixed(0)}% · ${b.search ? "strategy from live search" : "strategy from the trained net"}</div>
+      ${barsHTML(b.probs, b.chosen)}${adapt}${s}</div>`;
+  }).join("") || '<div class="empty">The bot made no decisions this hand.</div>');
+}
+
+function renderProfile(v) {
+  const p = v.profile;
+  $("adapt").checked = v.adapt;
+  if (!p.hands) {
+    $("profile").innerHTML = '<div class="empty">Nothing yet. Play a few hands and it starts reading your tendencies.</div>';
+    return;
+  }
+  $("profile").innerHTML = `<p class="info" style="margin:0 0 4px">Based on ${p.hands} hands</p>` +
+    p.traits.map(t => `<div class="trait">
+      <div>${esc(t.label)}<div class="sub">${t.seen} times seen · ${t.confidence < 0.4 ? "still guessing" : t.confidence < 0.75 ? "getting a read" : "confident"}</div></div>
+      <div class="gauge"><i style="left:${100 * t.typical}%"></i><b style="left:${100 * t.value}%"></b></div>
+      <div class="pct">${(100 * t.value).toFixed(0)}%</div></div>`).join("");
+}
+
+function show(v) {
+  view = v;
+  $("status").textContent = v.status;
+  $("about").textContent = v.about;
+  renderReadouts($("stats"), v.stats, ["your result", "your win rate"], "");
+  renderProfile(v);
+  if (shown > v.events.length) shown = 0;
+  const step = () => {
+    renderTable($("table"), tableState(v, shown));
+    renderLog(v, shown);
+    if (shown < v.events.length) { busy = true; renderControls(v); shown++; setTimeout(step, shown === 1 ? 50 : 650); return; }
+    busy = false;
+    renderBot(v);
+    $("result").textContent = v.over ? v.result : "";
+    renderControls(v);
+  };
+  step();
+}
+
+async function send(path, body) {
+  if (busy) return;
+  busy = true; renderControls(view);
+  $("thinking").textContent = "Bot is thinking…";
+  try { show(await api(path, body)); }
+  catch (e) { $("thinking").textContent = "Couldn't do that: " + e.message; busy = false; renderControls(view); return; }
+  $("thinking").textContent = "";
+}
+
+$("fold").onclick = () => send("/api/act", { action: "fold" });
+$("call").onclick = () => send("/api/act", { action: view.legal.actions.includes("call") ? "call" : "check" });
+$("raise").onclick = () => send("/api/act", { action: "raise", amount: +$("amtn").value });
+$("next").onclick = () => { shown = 0; send("/api/new", {}); };
+$("amt").oninput = () => { $("amtn").value = $("amt").value; renderControls(view); };
+$("amtn").onchange = () => { $("amt").value = $("amtn").value; renderControls(view); };
+$("adapt").onchange = async () => { view = await api("/api/adapt", { on: $("adapt").checked }); renderProfile(view); };
+$("forget").onclick = async () => {
+  if (!confirm("Forget everything the bot has learned about how you play? This can't be undone.")) return;
+  view = await api("/api/forget", {}); renderProfile(view);
+};
+api("/api/state").then(v => { shown = 0; show(v); });
+</script>
+</body>
+</html>

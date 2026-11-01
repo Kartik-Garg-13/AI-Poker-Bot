@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poker Bot Training</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1 id="title">Training</h1>
+  <span class="status" id="status">Connecting to the training process…</span>
+  <span class="clock" id="elapsed"></span>
+</header>
+<div class="progress"><div id="bar" style="width:0"></div></div>
+<main>
+  <div class="col">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>The bot playing itself</h2>
+        <label class="muted row">Speed
+          <select id="speed"><option value="1500">Slow</option><option value="800" selected>Normal</option><option value="300">Fast</option></select>
+        </label>
+      </div>
+      <div id="table"></div>
+      <div class="result" id="result"></div>
+      <p class="info">Bars show how likely the bot was to take each action; brass marks the one it picked.
+        Mixing is deliberate: a bot that always does the same thing is easy to exploit.</p>
+    </section>
+    <section class="panel">
+      <h2>Hand log</h2>
+      <div class="log" id="handlog"><div class="empty">The first self-play hand appears within a few seconds.</div></div>
+    </section>
+  </div>
+  <div class="col">
+    <section class="panel">
+      <h2>Is it learning?</h2>
+      <div id="stats"></div>
+      <p class="info" id="info"></p>
+    </section>
+    <section class="panel">
+      <h2>Learning curves</h2>
+      <div class="charts" id="charts"><div class="empty">Curves start drawing once the first network update lands.</div></div>
+    </section>
+    <section class="panel">
+      <h2>Training log</h2>
+      <pre class="syslog" id="syslog"></pre>
+    </section>
+  </div>
+  <section class="panel span-all hidden" id="netpanel">
+    <h2 id="netname">Neural network</h2>
+    <p class="info" style="margin:0 0 12px">Every line is a connection and every circle a neuron. Blue pushes an output up, coral pushes it down,
+      and the moving dots are the signal for the situation below. Hover a neuron to trace it, click to pin it, drag the sliders to
+      invent a hand.</p>
+    <div id="netviz"></div>
+  </section>
+</main>
+<script src="poker.js"></script>
+<script src="netviz.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let state = null, shownHand = 0, playing = false, lastNetSteps = -1, lastNetName = "";
+
+function renderStats(s) {
+  $("title").textContent = s.title;
+  document.title = s.title;
+  $("status").textContent = s.status;
+  $("elapsed").textContent = s.elapsed !== undefined ? `${Math.floor(s.elapsed / 60)}m ${s.elapsed % 60}s` : "";
+  $("bar").style.width = (100 * s.progress).toFixed(1) + "%";
+  renderReadouts($("stats"), s.stats, ["vs random", "vs calling station", "ETA"], "First readings arrive after iteration 1, about a minute in.");
+  $("info").textContent = s.info || "";
+  $("syslog").textContent = s.log.join("\n");
+  $("syslog").scrollTop = 1e9;
+}
+
+function renderCharts(charts) {
+  const box = $("charts");
+  if (Object.keys(charts).length) box.querySelector(".empty")?.remove();
+  for (const [name, chart] of Object.entries(charts)) {
+    const id = "chart-" + name.replace(/\W+/g, "_");
+    let el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement("div"); el.className = "chart"; el.id = id;
+      el.innerHTML = `<h3>${esc(name)}${chart.log ? " (log scale)" : ""}</h3><canvas></canvas><div class="lg"></div>`;
+      box.appendChild(el);
+    }
+    drawChart(el.querySelector("canvas"), chart);
+    el.querySelector(".lg").innerHTML = legendHTML(Object.keys(chart.series));
+  }
+}
+
+let viz = null;
+function renderNet(net) {
+  $("netpanel").classList.toggle("hidden", !net);
+  if (!net) return;
+  $("netname").textContent = net.name;
+  if (!viz) viz = new NetViz($("netviz"), 640);
+  viz.setNet(net);
+}
+
+function playHand(h) {
+  playing = true; shownHand = h.id;
+  const t = { names: h.names, hole: h.hole, board: [], pot: h.pot, stacks: h.stacks, button: h.button, bubbles: [null, null], active: null, top: 1 };
+  renderTable($("table"), t);
+  $("result").textContent = "";
+  const log = $("handlog");
+  log.innerHTML = `<div class="deal">${esc(h.names[0])}: ${h.hole[0].join(" ")} &nbsp; vs &nbsp; ${esc(h.names[1])}: ${h.hole[1].join(" ")}</div>`;
+  let i = 0;
+  const step = () => {
+    if (i >= h.events.length) {
+      $("result").textContent = h.result;
+      t.active = null; renderTable($("table"), t);
+      log.insertAdjacentHTML("beforeend", `<div class="deal">${esc(h.result)}</div>`);
+      setTimeout(() => { playing = false; maybeStart(); }, 2200);
+      return;
+    }
+    const e = h.events[i++];
+    if (e.deal) {
+      t.board = e.board; t.bubbles = [null, null];
+      log.insertAdjacentHTML("beforeend", `<div class="deal">— ${esc(e.deal)}: ${e.board.join(" ")}</div>`);
+    } else {
+      t.bubbles = [null, null]; t.bubbles[e.actor] = e.text; t.active = e.actor; t.board = e.board;
+      log.insertAdjacentHTML("beforeend", `<div class="ev"><b>${esc(h.names[e.actor])}</b> ${esc(e.text)}${barsHTML(e.probs, e.chosen)}</div>`);
+    }
+    t.pot = e.pot; if (e.stacks) t.stacks = e.stacks;
+    renderTable($("table"), t);
+    log.scrollTop = 1e9;
+    setTimeout(step, +$("speed").value);
+  };
+  setTimeout(step, +$("speed").value);
+}
+
+function maybeStart() {
+  if (!playing && state && state.hand && state.hand.id !== shownHand) playHand(state.hand);
+}
+
+async function poll() {
+  try {
+    state = await api("/api/state");
+    renderStats(state);
+    renderCharts(state.charts);
+    if (state.network && (state.network.steps !== lastNetSteps || state.network.name !== lastNetName)) {
+      lastNetSteps = state.network.steps; lastNetName = state.network.name;
+      renderNet(state.network);
+    }
+    maybeStart();
+  } catch (e) {
+    $("status").textContent = "Can't reach the training process. It has finished or was stopped.";
+  }
+  setTimeout(poll, 700);
+}
+window.onresize = () => { if (state) renderCharts(state.charts); };
+poll();
+</script>
+</body>
+</html>

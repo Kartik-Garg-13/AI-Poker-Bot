@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Poker Bot · a self-taught Texas Hold’em player</title>
+<meta name="description" content="A heads-up no-limit Texas Hold’em AI that learned by playing itself on a laptop, with Deep CFR. It taught itself to bluff.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --felt: #155238;
+  --felt-stage: #11452F;
+  --black: #0E1210;
+  --ivory: #E7E6E2;
+  --red: #8F1C16;
+  --brass: #D9AE52;
+  --paper: #F7F7F5;
+  --step-small: clamp(0.875rem, 0.85rem + 0.1vw, 0.9375rem);
+  --step-body: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);
+  --step-lead: clamp(1.375rem, 1.1rem + 0.9vw, 2.125rem);
+  --step-head: clamp(2.5rem, 1.2rem + 4.6vw, 5.5rem);
+  --step-display: clamp(3.5rem, 12.5vw, 13rem);
+  --m: clamp(16px, 2.8vw, 40px);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }
+body { font-family: "Hanken Grotesk", system-ui, sans-serif; font-size: var(--step-body); line-height: 1.45; letter-spacing: -0.005em; background: var(--black); color: var(--ivory); }
+a { color: inherit; }
+img { display: block; max-width: 100%; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--brass); outline-offset: 3px; }
+.num { font-variant-numeric: tabular-nums; }
+.field { position: relative; min-height: 92svh; padding: var(--m); overflow: hidden; }
+.f-felt { background: var(--felt); color: var(--ivory); }
+.f-black { background: var(--black); color: var(--ivory); }
+.f-ivory { background: var(--ivory); color: var(--black); }
+.f-red { background: var(--red); color: var(--ivory); }
+.f-brass { background: var(--brass); color: var(--black); }
+h1, h2, h3 { font-weight: 500; letter-spacing: -0.05em; line-height: 0.9; text-wrap: balance; }
+p { text-wrap: pretty; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 24px; border: 0; border-radius: 999px;
+  background: var(--brass); color: var(--black); font-weight: 500; text-decoration: none; cursor: pointer;
+  transition: transform 160ms var(--ease-out), background-color 160ms var(--ease-out); }
+.btn:hover { background: #E7C06A; }
+.btn:active { transform: scale(0.97); }
+.btn.dark { background: var(--black); color: var(--ivory); }
+.btn.dark:hover { background: #26302B; }
+
+.pc { width: 44px; height: 62px; border-radius: 6px; background: var(--paper); color: var(--black); display: inline-flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px; line-height: 1; font-weight: 500; font-size: var(--step-body); }
+.pc .s { width: 0.85em; height: 0.85em; fill: currentColor; }
+.pc.red { color: var(--red); }
+.pc.big { width: clamp(120px, 13vw, 190px); height: clamp(168px, 18.2vw, 266px); border-radius: 14px; font-size: var(--step-head); gap: 8px; }
+.board { position: absolute; top: var(--m); right: var(--m); display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 1; }
+.board .cards { display: flex; gap: 6px; }
+.board p { font-size: var(--step-small); }
+
+/* hero */
+.hero { min-height: 100svh; display: grid; grid-template-rows: auto 1fr auto; }
+.nav { display: flex; align-items: center; justify-content: space-between; gap: 24px; font-size: var(--step-small); }
+.nav .links { display: flex; align-items: center; gap: 24px; }
+.nav .links a { text-decoration: none; }
+.nav .links a:not(.btn):hover { text-decoration: underline; text-underline-offset: 4px; }
+.hero h1 { font-size: var(--step-display); line-height: 0.82; letter-spacing: -0.05em; margin-top: 10svh; }
+.lines .line { display: block; overflow: hidden; padding-bottom: 0.2em; margin-bottom: -0.2em; }
+.lines [data-line] { display: block; }
+.hero .l2 { color: var(--brass); }
+.hero .support { justify-self: end; max-width: 30ch; font-size: var(--step-body); text-align: right; margin-bottom: 40px; }
+
+/* preflop */
+.preflop { display: grid; grid-template-columns: repeat(12, 1fr); column-gap: 24px; align-items: center; align-content: center; }
+.preflop .statement { grid-column: 1 / span 7; font-size: var(--step-lead); line-height: 1.2; letter-spacing: -0.02em; }
+.preflop .hand { grid-column: 8 / span 5; display: flex; gap: 20px; justify-content: flex-end; }
+.preflop .hand .pc:nth-child(1) { transform: rotate(-6deg); }
+.preflop .hand .pc:nth-child(2) { transform: rotate(5deg) translateY(18px); }
+.preflop .caption { grid-column: 8 / span 5; text-align: right; font-size: var(--step-small); margin-top: 32px; }
+
+/* flop: how it learns */
+.strip { display: grid; grid-template-columns: repeat(4, 1fr); }
+.strip .col { position: relative; min-height: 84svh; padding: 28px; display: flex; flex-direction: column; }
+.strip h2 { font-size: var(--step-lead); letter-spacing: -0.03em; line-height: 1.05; }
+.strip .card-wrap { position: absolute; top: 38%; left: 50%; transform: translateX(-50%); transition: transform 150ms var(--ease-out); }
+.strip .col:hover .card-wrap { transform: translateX(-50%) translateY(-6px); }
+.strip .clause { margin-top: auto; font-size: var(--step-lead); line-height: 1.1; letter-spacing: -0.03em; max-width: 13ch; }
+.dcard { width: 260px; background: var(--paper); color: var(--black); border-radius: 10px; padding: 16px; font-size: var(--step-small); }
+.dcard .t { font-weight: 500; margin-bottom: 10px; }
+.dcard .row { display: flex; justify-content: space-between; padding: 6px 0; font-variant-numeric: tabular-nums; }
+.dcard .sub { margin-top: 10px; color: #4A524D; }
+.pos { color: #155238; } .neg { color: var(--red); }
+
+/* turn: what it wins */
+.wins { display: flex; flex-direction: column; justify-content: space-between; min-height: 92svh; }
+.wins h2 { font-size: var(--step-lead); letter-spacing: -0.03em; line-height: 1.05; }
+.control { width: min(400px, 100%); margin-top: 28px; background: #1A201D; border-radius: 12px; padding: 20px; }
+.control label { display: flex; justify-content: space-between; font-size: var(--step-small); margin-bottom: 10px; }
+.control input[type=range] { width: 100%; accent-color: var(--brass); height: 44px; }
+.seg { display: flex; background: #0E1210; border-radius: 999px; padding: 4px; margin-top: 14px; }
+.seg button { flex: 1; min-height: 40px; border: 0; border-radius: 999px; background: transparent; cursor: pointer; font-size: var(--step-small); transition: background-color 160ms var(--ease-out); }
+.seg button[aria-pressed=true] { background: var(--ivory); color: var(--black); }
+.wins .bottom { display: flex; justify-content: space-between; align-items: flex-end; gap: 32px; flex-wrap: wrap; }
+.figure { font-size: var(--step-display); line-height: 0.8; letter-spacing: -0.05em; font-weight: 500; font-variant-numeric: tabular-nums; }
+.figure small { font-size: 0.22em; letter-spacing: -0.01em; margin-left: 0.2em; font-weight: 400; }
+.wins .how { max-width: 30ch; }
+
+/* river */
+.river { display: grid; grid-template-columns: repeat(12, 1fr); column-gap: 24px; padding: 0; min-height: 92svh; }
+.river .names { grid-column: 1 / span 5; padding: calc(var(--m) * 2) var(--m); display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.river .names button { text-align: left; background: none; border: 0; cursor: pointer; font-size: var(--step-lead); line-height: 1.15; letter-spacing: -0.03em;
+  color: rgba(231, 230, 226, 0.62); padding: 4px 0; transition: color 160ms var(--ease-out), transform 160ms var(--ease-out); }
+.river .names button:hover { color: var(--ivory); transform: translateX(6px); }
+.river .names button[aria-pressed=true] { color: var(--ivory); }
+.river .names p { max-width: 34ch; margin-top: 28px; }
+.river .stage { grid-column: 7 / span 6; background: var(--felt-stage); position: relative; overflow: hidden; min-height: 92svh; }
+.sheet { position: absolute; top: 72px; left: 64px; width: 560px; background: var(--paper); color: var(--black); border-radius: 14px; padding: 32px;
+  transition: opacity 200ms var(--ease-out); }
+.sheet .head { display: flex; justify-content: space-between; gap: 16px; font-size: var(--step-small); color: #4A524D; }
+.sheet .cards { display: flex; gap: 6px; margin: 18px 0; align-items: center; }
+.sheet .cards .gap { width: 18px; }
+.sheet .pc { background: #EFEBE1; }
+.sheet .verdict { font-size: var(--step-head); letter-spacing: -0.05em; line-height: 0.95; font-weight: 500; margin: 6px 0 18px; font-variant-numeric: tabular-nums; }
+.sheet .act { display: grid; grid-template-columns: 110px 1fr 52px; gap: 12px; align-items: center; padding: 7px 0; font-size: var(--step-small); font-variant-numeric: tabular-nums; }
+.sheet .act .bar { height: 10px; background: #ECE6D6; border-radius: 999px; overflow: hidden; }
+.sheet .act .bar i { display: block; height: 100%; background: var(--felt); border-radius: 999px; transition: width 220ms var(--ease-out); }
+.sheet .act.off { color: #9AA19C; }
+.sheet .eq { margin-top: 24px; padding: 14px 16px 10px; background: #F1EEE6; border-radius: 10px; }
+.sheet .eq label { display: flex; justify-content: space-between; font-size: var(--step-small); }
+.sheet .eq input { width: 100%; height: 40px; accent-color: var(--felt); }
+.sheet .note { font-size: var(--step-small); color: #3E4641; margin-top: 8px; }
+
+/* showdown: gallery */
+.gallery { padding: 8px; min-height: auto; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.tile { aspect-ratio: 1; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.tile .big { font-size: var(--step-head); letter-spacing: -0.05em; line-height: 1; font-weight: 500; font-variant-numeric: tabular-nums; }
+.tile .cap { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center; font-size: var(--step-small); padding: 0 12px; }
+.tile img { width: 100%; height: 100%; object-fit: cover; }
+.t-black { background: var(--black); color: var(--ivory); } .t-felt { background: var(--felt); color: var(--ivory); }
+.t-red { background: var(--red); color: var(--ivory); } .t-brass { background: var(--brass); color: var(--black); }
+.t-pic { background: var(--black); }
+
+/* history */
+.history { padding: 120px var(--m); min-height: auto; }
+.history .story { columns: 2; column-gap: 32px; font-size: var(--step-lead); line-height: 1.18; letter-spacing: -0.02em; text-align: justify; hyphens: auto; }
+.hl { box-decoration-break: clone; -webkit-box-decoration-break: clone; padding: 0 0.1em; }
+.hl-b { background: var(--brass); color: var(--black); } .hl-i { background: var(--ivory); color: var(--black); } .hl-k { background: var(--black); color: var(--ivory); }
+.history a.hl { text-decoration: none; }
+.history a.hl:hover { background: var(--ivory); }
+
+/* your move */
+.move { display: grid; grid-template-columns: repeat(12, 1fr); column-gap: 24px; min-height: 90svh; }
+.move .close { grid-column: 1 / span 5; align-self: end; padding-bottom: 40px; }
+.move h2 { font-size: var(--step-head); line-height: 0.92; }
+.move .close p { margin-top: 20px; max-width: 34ch; }
+.dialog { grid-column: 7 / span 5; align-self: center; width: min(440px, 100%); background: var(--paper); color: var(--black); border-radius: 16px; padding: 28px; }
+.dialog h3 { font-size: var(--step-lead); letter-spacing: -0.03em; line-height: 1.1; }
+.dialog .seg { background: #ECE6D6; }
+.dialog .seg button[aria-pressed=true] { background: var(--black); color: var(--ivory); }
+.dialog pre { margin-top: 18px; background: var(--black); color: var(--ivory); border-radius: 10px; padding: 16px; font-size: var(--step-small); overflow-x: auto; }
+.dialog .hint { font-size: var(--step-small); color: #3E4641; margin: 12px 0 20px; }
+.dialog .btn { width: 100%; min-height: 52px; }
+
+/* footer */
+.foot { padding: var(--m); min-height: 90svh; display: flex; flex-direction: column; }
+.foot .name { font-size: var(--step-display); line-height: 0.9; letter-spacing: -0.05em; font-weight: 500; white-space: nowrap; }
+.foot .row { display: grid; grid-template-columns: repeat(12, 1fr); column-gap: 24px; margin-top: 72px; }
+.foot .places { grid-column: 1 / span 5; display: flex; flex-direction: column; gap: 6px; }
+.foot .places a { font-size: var(--step-lead); color: var(--brass); text-decoration: none; letter-spacing: -0.02em; }
+.foot .places a:hover { text-decoration: underline; text-underline-offset: 6px; }
+.foot .cols { grid-column: 7 / span 6; display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; font-size: var(--step-small); }
+.foot .cols p { margin-bottom: 6px; }
+.foot .cols b { font-weight: 500; display: block; margin-bottom: 8px; }
+.foot .legal { margin-top: auto; padding-top: 96px; display: flex; justify-content: space-between; font-size: var(--step-small); }
+
+/* motion */
+@media (prefers-reduced-motion: no-preference) {
+  .js .lines [data-line] { transform: translateY(105%); animation: line-up 900ms var(--ease-out) forwards; animation-delay: calc(var(--i) * 110ms + 150ms); }
+  .js .hero .support, .js .hero .nav { opacity: 0; animation: fade-up 700ms var(--ease-out) 600ms forwards; }
+  .js [data-reveal] { opacity: 0; transform: translateY(24px); transition: opacity 700ms var(--ease-out), transform 700ms var(--ease-out); transition-delay: calc(var(--d, 0) * 80ms); }
+  .js [data-reveal].in { opacity: 1; transform: none; }
+  .js .deal .pc { opacity: 0; transform: translateY(-28px) rotate(-8deg); transition: opacity 500ms var(--ease-out), transform 500ms var(--ease-out); transition-delay: calc(var(--k, 0) * 90ms + 200ms); }
+  .js .deal.in .pc { opacity: 1; transform: none; }
+  .js .preflop .hand.in .pc:nth-child(1) { transform: rotate(-6deg); }
+  .js .preflop .hand.in .pc:nth-child(2) { transform: rotate(5deg) translateY(18px); }
+  .tile img { animation: drift 14s ease-in-out infinite alternate; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+@keyframes line-up { to { transform: none; } }
+@keyframes fade-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes drift { from { transform: scale(1); } to { transform: scale(1.07); } }
+
+@media (max-width: 1100px) and (min-width: 761px) { .strip { grid-template-columns: repeat(2, 1fr); } }
+
+/* phone */
+@media (max-width: 760px) {
+  .nav .links a:not(.btn) { display: none; }
+  .hero h1 { margin-top: 16svh; font-size: 15.5vw; }
+  .hero .support { justify-self: start; text-align: left; margin-bottom: 24px; }
+  .preflop { display: flex; flex-direction: column; align-items: flex-start; gap: 40px; padding-top: 96px; }
+  .preflop .hand { justify-content: flex-start; }
+  .preflop .caption { text-align: left; margin-top: 0; }
+  .strip { grid-template-columns: 1fr; }
+  .strip .col { min-height: 64svh; padding: 20px; }
+  .strip .card-wrap { position: static; transform: none; margin-top: 32px; }
+  .strip .col:hover .card-wrap { transform: none; }
+  .strip .clause { margin-top: 24px; order: -1; }
+  .strip h2 { order: -2; margin-bottom: 8px; }
+  .wins { min-height: 84svh; padding-top: 112px; }
+  .wins .bottom { flex-direction: column; align-items: flex-start; }
+  .river { display: block; }
+  .river .names { padding: 112px 16px 24px; flex-direction: row; flex-wrap: wrap; gap: 4px 20px; justify-content: flex-start; }
+  .river .names button { white-space: nowrap; }
+  .river .names p { display: none; }
+  .river .stage { min-height: 82svh; }
+  .sheet { left: 16px; top: 24px; width: calc(100% - 32px); max-width: 560px; padding: 22px; }
+  .tiles { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .history { padding: 96px 18px; }
+  .history .story { columns: 1; line-height: 1.25; text-align: left; }
+  .move { display: flex; flex-direction: column; justify-content: space-between; gap: 40px; min-height: 84svh; }
+  .move .close { padding-bottom: 0; }
+  .dialog { width: 100%; }
+  .foot .row { display: flex; flex-direction: column; gap: 40px; margin-top: 48px; }
+  .foot .cols { grid-template-columns: 1fr 1fr; }
+  .foot .legal { padding-top: 64px; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="spade" viewBox="0 0 24 24"><path d="M12 2s-8 6.3-8 11.2C4 16 6 18 8.4 18c1.3 0 2.4-.5 3-1.2-.2 2-1 3.6-2.6 5.2h6.4c-1.6-1.6-2.4-3.2-2.6-5.2.6.7 1.7 1.2 3 1.2C18 18 20 16 20 13.2 20 8.3 12 2 12 2z"/></symbol>
+  <symbol id="heart" viewBox="0 0 24 24"><path d="M12 21s-7.6-4.6-9.6-9.3C.9 8.3 3 4.5 6.7 4.5c2.2 0 3.6 1.2 4.3 2.5.7-1.3 2.1-2.5 4.3-2.5 3.7 0 5.8 3.8 4.3 7.2C19.6 16.4 12 21 12 21z"/></symbol>
+  <symbol id="diamond" viewBox="0 0 24 24"><path d="M12 2l8 10-8 10-8-10z"/></symbol>
+  <symbol id="club" viewBox="0 0 24 24"><path d="M12 2.5a4 4 0 0 1 3.5 6 4 4 0 1 1-2.6 7.1c.2 2.4 1 4.2 2.7 5.9H8.4c1.7-1.7 2.5-3.5 2.7-5.9a4 4 0 1 1-2.6-7.1 4 4 0 0 1 3.5-6z"/></symbol>
+</svg>
+
+<header class="field f-felt hero" id="top">
+  <nav class="nav" aria-label="Main">
+    <a href="#top" style="text-decoration:none;font-weight:500">AI Poker Bot</a>
+    <div class="links">
+      <a href="#learn">How it learns</a>
+      <a href="#wins">What it wins</a>
+      <a href="#river">The river</a>
+      <a class="btn" href="#play">Play it</a>
+    </div>
+  </nav>
+  <h1 class="lines">
+    <span class="line"><span data-line style="--i:0">Poker bot,</span></span>
+    <span class="line"><span data-line style="--i:1" class="l2">self-taught.</span></span>
+  </h1>
+  <p class="support">A heads-up Texas Hold’em AI that learned by playing itself on a laptop. Nobody told it when to bluff.</p>
+</header>
+
+<section class="field f-black preflop" aria-label="Preflop">
+  <p class="statement" data-reveal>This page deals one hand. The bot holds seven–two, the worst start in poker. On the river it has nothing, and bets anyway.</p>
+  <div class="hand deal" data-reveal>
+    <div class="pc big" style="--k:0"><span>7</span><svg class="s" role="img" aria-label="clubs"><use href="#club"/></svg></div>
+    <div class="pc big red" style="--k:1"><span>2</span><svg class="s" role="img" aria-label="diamonds"><use href="#diamond"/></svg></div>
+  </div>
+  <p class="caption" data-reveal style="--d:2">Preflop: the bot’s two cards, seven of clubs and two of diamonds.</p>
+</section>
+
+<section class="strip" id="learn" aria-label="The flop: how it learns">
+  <div class="col f-ivory">
+    <h2 data-reveal>How it learns</h2>
+    <div class="card-wrap">
+      <div class="dcard" data-ui data-reveal style="--d:1">
+        <p class="t">River · checked to the bot</p>
+        <div class="row"><span>Check</span><span>tried</span></div>
+        <div class="row"><span>Bet ½ pot</span><span>tried</span></div>
+        <div class="row"><span>Bet pot</span><span>tried</span></div>
+        <div class="row"><span>All-in</span><span>tried</span></div>
+        <p class="sub">Self-play, one sample hand</p>
+      </div>
+    </div>
+    <p class="clause" data-reveal style="--d:2">First it tries every action.</p>
+  </div>
+  <div class="col f-felt">
+    <div class="card-wrap">
+      <div class="dcard" data-ui data-reveal style="--d:1">
+        <p class="t">Regret, in chips</p>
+        <div class="row"><span>Check</span><span class="neg">−1.2</span></div>
+        <div class="row"><span>Bet ½ pot</span><span class="pos">+0.6</span></div>
+        <div class="row"><span>Bet pot</span><span class="pos">+0.9</span></div>
+        <div class="row"><span>All-in</span><span class="neg">−0.3</span></div>
+        <p class="sub">How much better each would have done</p>
+      </div>
+    </div>
+    <p class="clause" data-reveal style="--d:2">Then it scores each regret.</p>
+  </div>
+  <div class="col f-brass">
+    <div class="card-wrap">
+      <div class="dcard" data-ui data-reveal style="--d:1">
+        <p class="t">The network’s guess</p>
+        <div class="row"><span>Check</span><span>44%</span></div>
+        <div class="row"><span>Bet ½ pot</span><span>22%</span></div>
+        <div class="row"><span>Bet pot</span><span>33%</span></div>
+        <div class="row"><span>All-in</span><span>0%</span></div>
+        <p class="sub">Learned from thousands of hands</p>
+      </div>
+    </div>
+    <p class="clause" data-reveal style="--d:2">Next, a network learns the pattern.</p>
+  </div>
+  <div class="col f-red">
+    <div class="card-wrap">
+      <div class="dcard" data-ui data-reveal style="--d:1">
+        <p class="t">The strategy that plays</p>
+        <div class="row"><span>Check</span><span>51%</span></div>
+        <div class="row"><span>Bet ½ pot</span><span>18%</span></div>
+        <div class="row"><span>Bet pot</span><span>27%</span></div>
+        <div class="row"><span>All-in</span><span>4%</span></div>
+        <p class="sub">The trained bot, after 60 rounds</p>
+      </div>
+    </div>
+    <p class="clause" data-reveal style="--d:2">Last, the average is what plays.</p>
+    <div class="board deal" data-reveal>
+      <div class="cards"><div class="pc" style="--k:0"><span>K</span><svg class="s" role="img" aria-label="spades"><use href="#spade"/></svg></div><div class="pc red" style="--k:1"><span>9</span><svg class="s" role="img" aria-label="hearts"><use href="#heart"/></svg></div><div class="pc red" style="--k:2"><span>4</span><svg class="s" role="img" aria-label="diamonds"><use href="#diamond"/></svg></div></div>
+      <p>The flop</p>
+    </div>
+  </div>
+</section>
+
+<section class="field f-black wins" id="wins" aria-label="The turn: what it wins">
+  <div class="board deal" data-reveal>
+    <div class="cards"><div class="pc" style="--k:0"><span>K</span><svg class="s" role="img" aria-label="spades"><use href="#spade"/></svg></div><div class="pc red" style="--k:1"><span>9</span><svg class="s" role="img" aria-label="hearts"><use href="#heart"/></svg></div><div class="pc red" style="--k:2"><span>4</span><svg class="s" role="img" aria-label="diamonds"><use href="#diamond"/></svg></div><div class="pc" style="--k:3"><span>J</span><svg class="s" role="img" aria-label="clubs"><use href="#club"/></svg></div></div>
+    <p>The turn</p>
+  </div>
+  <div>
+    <h2 data-reveal>What does it win?</h2>
+    <div class="control" data-ui data-reveal style="--d:1">
+      <label for="hands"><span>Hands played</span><output id="handsOut" class="num">1,000</output></label>
+      <input id="hands" type="range" min="100" max="10000" step="100" value="1000" aria-describedby="howWins">
+      <div class="seg" role="group" aria-label="Opponent">
+        <button type="button" data-rate="392" aria-pressed="true">Random bot</button>
+        <button type="button" data-rate="493" aria-pressed="false">Always calls</button>
+      </div>
+    </div>
+  </div>
+  <div class="bottom">
+    <p class="figure" data-reveal><span id="figure">+3,920</span><small>big blinds</small></p>
+    <p class="how" id="howWins" data-reveal style="--d:1">The measured rate times the hands: +392 big blinds per 100 hands against a random bot, +493 against one that always calls, averaged over 12,000 duplicate hands each.</p>
+  </div>
+</section>
+
+<section class="field f-felt river" id="river" aria-label="The river: what the bot does">
+  <div class="names" role="group" aria-label="Situations">
+    <button type="button" data-spot="air" aria-pressed="true">Nothing at all</button>
+    <button type="button" data-spot="nuts" aria-pressed="false">The nuts</button>
+    <button type="button" data-spot="allin" aria-pressed="false">Facing all-in</button>
+    <button type="button" data-spot="toppair" aria-pressed="false">Top pair</button>
+    <button type="button" data-spot="aces" aria-pressed="false">Pocket aces</button>
+    <button type="button" data-spot="seventwo" aria-pressed="false">Seven–two</button>
+    <p>Every number here comes live from the trained network, running in your browser. Drag its equity and watch the strategy move.</p>
+  </div>
+  <div class="stage">
+    <div class="sheet" id="sheet" data-ui aria-live="polite">
+      <div class="head"><span id="sStreet">River · checked to the bot</span><span>Trained bot</span></div>
+      <div class="cards" id="sCards"><div class="pc"><span>7</span><svg class="s" role="img" aria-label="clubs"><use href="#club"/></svg></div><div class="pc red"><span>2</span><svg class="s" role="img" aria-label="diamonds"><use href="#diamond"/></svg></div><span class="gap"></span><div class="pc"><span>K</span><svg class="s" role="img" aria-label="spades"><use href="#spade"/></svg></div><div class="pc red"><span>9</span><svg class="s" role="img" aria-label="hearts"><use href="#heart"/></svg></div><div class="pc red"><span>4</span><svg class="s" role="img" aria-label="diamonds"><use href="#diamond"/></svg></div><div class="pc"><span>J</span><svg class="s" role="img" aria-label="clubs"><use href="#club"/></svg></div><div class="pc"><span>3</span><svg class="s" role="img" aria-label="spades"><use href="#spade"/></svg></div></div>
+      <p class="verdict" id="sVerdict">Bets 49%</p>
+      <div id="sActs">
+        <div class="act"><span>Check</span><span class="bar"><i style="width:51%"></i></span><span>51%</span></div>
+        <div class="act"><span>Bet ½ pot</span><span class="bar"><i style="width:18%"></i></span><span>18%</span></div>
+        <div class="act"><span>Bet pot</span><span class="bar"><i style="width:27%"></i></span><span>27%</span></div>
+        <div class="act"><span>All-in</span><span class="bar"><i style="width:4%"></i></span><span>4%</span></div>
+      </div>
+      <div class="eq">
+        <label for="eq"><span>Bot’s equity (chance to win)</span><output id="eqOut" class="num">8%</output></label>
+        <input id="eq" type="range" min="0" max="100" value="8">
+        <p class="note" id="sNote">Seven-high on this board. It bets about half the time anyway: a bluff it was never taught.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="gallery f-ivory" aria-label="Showdown: what is inside">
+  <div class="tiles">
+    <div class="tile t-black" data-reveal><span class="big">Inside</span><span class="cap">what the bot is made of</span></div>
+    <div class="tile t-felt" data-reveal style="--d:1"><span class="big num">60</span><span class="cap">rounds of self-play</span></div>
+    <div class="tile t-pic" data-reveal style="--d:2"><img src="assets/screen-training.jpg" alt="The training dashboard: the bot playing itself, its win rate and its learning curves" width="800" height="505" loading="lazy"></div>
+    <div class="tile t-red" data-reveal style="--d:3"><span class="big num">21</span><span class="cap">numbers it sees</span></div>
+    <div class="tile t-brass" data-reveal><span class="big num">64·3</span><span class="cap">hidden neurons</span></div>
+    <div class="tile t-black" data-reveal style="--d:1"><span class="big num">5</span><span class="cap">actions it can take</span></div>
+    <div class="tile t-pic" data-reveal style="--d:2"><img src="assets/the-card-players.jpg" alt="Paul Cézanne, The Card Players, 1890–92: three men at a café table playing cards while a fourth watches" width="1400" height="1115" loading="lazy"></div>
+    <div class="tile t-felt" data-reveal style="--d:3"><span class="big num">10k</span><span class="cap">connections</span></div>
+    <div class="tile t-red" data-reveal><span class="big num">127 KB</span><span class="cap">the whole trained brain</span></div>
+    <div class="tile t-pic" data-reveal style="--d:1"><img src="assets/screen-network.jpg" alt="The network explorer: every neuron and connection of the trained network" width="800" height="505" loading="lazy"></div>
+    <div class="tile t-brass" data-reveal style="--d:2"><span class="big num">2,600</span><span class="cap">lines of code</span></div>
+    <div class="tile t-black" data-reveal style="--d:3"><span class="big num">25 min</span><span class="cap">of training on a laptop</span></div>
+    <div class="tile t-felt" data-reveal><span class="big num">1</span><span class="cap">dependency: numpy</span></div>
+    <div class="tile t-pic" data-reveal style="--d:1"><img src="assets/the-cloisters-playing-cards.jpg" alt="The Cloisters Playing Cards, about 1475–80: a complete hand-painted deck laid out in four rows" width="1400" height="843" loading="lazy"></div>
+    <div class="tile t-red" data-reveal style="--d:2"><span class="big num">12,000</span><span class="cap">test hands per opponent</span></div>
+    <div class="tile t-pic" data-reveal style="--d:3"><img src="assets/screen-play.jpg" alt="The play page: a hand against the bot, with its revealed reasoning" width="800" height="505" loading="lazy"></div>
+  </div>
+</section>
+
+<section class="field f-red history" aria-label="Where it comes from">
+  <p class="story" data-reveal><b style="font-weight:500">AI Poker Bot</b> stands on eighty years of game theory. In <span class="hl hl-b">1944</span> John von Neumann used a stripped-down poker to show why a good player has to bluff. In 1950 Harold Kuhn solved a three-card version by hand. In <span class="hl hl-i">2007</span> a team at the University of Alberta introduced <span class="hl hl-k">counterfactual regret minimisation</span>, and in 2017 <span class="hl hl-b">Libratus</span> used it to beat four professionals at heads-up no-limit. <span class="hl hl-i">Pluribus</span> followed in 2019, at six-player tables. This project rebuilds that line from scratch, in <span class="hl hl-k">Python on one laptop</span>: its own engine, its own network, sixty rounds of self-play. It is far weaker than its ancestors, and it still learned the same lesson: with nothing on the river, bet some of the time. <a class="hl hl-b" href="#play">Sit down and play it.</a></p>
+</section>
+
+<section class="field f-brass move" id="play" aria-label="Your move">
+  <div class="close">
+    <h2 class="lines" data-reveal>Your<br>move.</h2>
+    <p data-reveal style="--d:1">Download the code, run one command, and the table opens in your browser. Python 3 and numpy are all it needs; the trained bot comes with it.</p>
+  </div>
+  <div class="dialog" data-ui data-reveal style="--d:2">
+    <h3>Sit down at the table</h3>
+    <div class="seg" role="group" aria-label="What to run">
+      <button type="button" data-cmd="python play.py" data-hint="Opens the table at 127.0.0.1:8767. The bot reveals its reasoning after each hand and learns your habits." aria-pressed="true">Play the bot</button>
+      <button type="button" data-cmd="python train_deep_cfr.py" data-hint="Opens the dashboard at 127.0.0.1:8766 and keeps training the saved bot. Watch the network change live." aria-pressed="false">Watch it learn</button>
+    </div>
+    <pre><code id="cmd">python play.py</code></pre>
+    <p class="hint" id="hint">Opens the table at 127.0.0.1:8767. The bot reveals its reasoning after each hand and learns your habits.</p>
+    <a class="btn dark" href="../submission/AI_Poker_Bot_Code.zip" download>Download the code · 158 KB</a>
+  </div>
+</section>
+
+<footer class="f-black foot">
+  <p class="name" aria-hidden="true">AI Poker Bot</p>
+  <div class="row">
+    <div class="places">
+      <a href="../submission/AI_Poker_Bot_Code.zip" download>Download the code</a>
+      <a href="../README.md">How to run it</a>
+      <a href="#river">Ask the bot a question</a>
+    </div>
+    <div class="cols">
+      <div><b>Built with</b><p>Python and numpy</p><p>Deep CFR</p><p>Hanken Grotesk</p></div>
+      <div><b>Based on</b><p>Brown et al., Deep CFR, 2019</p><p>Zinkevich et al., CFR, 2007</p><p>Tammelin, CFR+, 2014</p></div>
+      <div><b>Pictures</b><p>The Card Players, Paul Cézanne, 1890–92, The Met, CC0</p><p>The Cloisters Playing Cards, about 1475–80, The Met, CC0</p><p>Screens: the project’s own</p></div>
+    </div>
+  </div>
+  <div class="legal"><span>A student project by [Your name] · October 2026</span><a href="#top">Back to top</a></div>
+</footer>
+
+<script src="bot.js"></script>
+<script>
+document.documentElement.classList.add("js");
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+
+const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: 0.15 });
+$$("[data-reveal]").forEach(el => io.observe(el));
+
+const fmt = n => n.toLocaleString("en-US");
+let rate = 392;
+function updateWins() {
+  const hands = +$("#hands").value;
+  $("#handsOut").textContent = fmt(hands);
+  $("#figure").textContent = "+" + fmt(Math.round(rate * hands / 100));
+}
+$("#hands").addEventListener("input", updateWins);
+$$(".wins .seg button").forEach(b => b.addEventListener("click", () => {
+  $$(".wins .seg button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  rate = +b.dataset.rate; updateWins();
+}));
+
+$$(".dialog .seg button").forEach(b => b.addEventListener("click", () => {
+  $$(".dialog .seg button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  $("#cmd").textContent = b.dataset.cmd; $("#hint").textContent = b.dataset.hint;
+}));
+
+const SUITS = { s: ["spade", "spades"], h: ["heart", "hearts"], d: ["diamond", "diamonds"], c: ["club", "clubs"] };
+const card = c => { const [id, name] = SUITS[c.slice(-1)]; return `<div class="pc${/[hd]$/.test(c) ? " red" : ""}"><span>${c.slice(0, -1)}</span><svg class="s" role="img" aria-label="${name}"><use href="#${id}"/></svg></div>`; };
+const RIVER = ["Ks", "9h", "4d", "Jc", "3s"];
+const SPOTS = {
+  air: { street: 3, eq: 0.08, pot: 0.1, odds: 0, my: 0.45, opp: 0.45, inpos: 1, raises: 0, oppr: 0, myr: 1, mask: [0, 1, 1, 1, 1],
+    title: "River · checked to the bot", hole: ["7c", "2d"], board: RIVER, note: "Seven-high on this board. It bets about half the time anyway: a bluff it was never taught." },
+  nuts: { street: 3, eq: 0.97, pot: 0.1, odds: 0, my: 0.45, opp: 0.45, inpos: 1, raises: 0, oppr: 0, myr: 1, mask: [0, 1, 1, 1, 1],
+    title: "River · checked to the bot", hole: ["Qh", "10h"], board: RIVER, note: "A straight, king high. It bets almost every time, and big." },
+  allin: { street: 3, eq: 0.55, pot: 0.55, odds: 0.8182, my: 0.45, opp: 0, inpos: 0, raises: 1, oppr: 2, myr: 0, mask: [1, 1, 0, 0, 0],
+    title: "River · facing an all-in", hole: ["9c", "8c"], board: RIVER, note: "A pair of nines needs 45% to call and has 55%. It folds anyway: the leak more training should close." },
+  toppair: { street: 1, eq: 0.8, pot: 0.06, odds: 0.3333, my: 0.48, opp: 0.46, inpos: 0, raises: 1, oppr: 1, myr: 0, mask: [1, 1, 1, 1, 1],
+    title: "Flop · facing a pot-sized bet", hole: ["Kd", "10c"], board: RIVER.slice(0, 3), note: "Top pair. It calls most of the time and raises now and then." },
+  aces: { street: 0, eq: 0.854, pot: 0.0075, odds: 0.25, my: 0.4975, opp: 0.495, inpos: 1, raises: 0, oppr: 0, myr: 0, mask: [1, 1, 1, 1, 1],
+    title: "Preflop · first to act", hole: ["As", "Ah"], board: [], note: "The best starting hand. It raises most of the time, often all-in." },
+  seventwo: { street: 0, eq: 0.3488, pot: 0.0075, odds: 0.25, my: 0.4975, opp: 0.495, inpos: 1, raises: 0, oppr: 0, myr: 0, mask: [1, 1, 1, 1, 1],
+    title: "Preflop · first to act", hole: ["7c", "2d"], board: [], note: "The worst starting hand. Folded often, raised almost as often." },
+};
+const NAMES = ["Fold", "Check", "Bet ½ pot", "Bet pot", "All-in"];
+
+function features(s) {
+  const x = new Array(21).fill(0);
+  x[s.street] = 1; x[4] = s.eq; x[5 + Math.min(Math.floor(s.eq * 8), 7)] = 1;
+  [s.pot, s.odds, s.my, s.opp, s.inpos, s.raises / 3, s.oppr / 4, s.myr / 4].forEach((v, i) => { x[13 + i] = v; });
+  return x;
+}
+function forward(x) {
+  let a = x;
+  BOT.W.forEach((W, l) => {
+    const z = BOT.b[l].map((b, j) => a.reduce((s, ai, i) => s + ai * W[i][j], b));
+    a = l < BOT.W.length - 1 ? z.map(v => Math.max(0, v)) : z;
+  });
+  return a;
+}
+function policy(s) {
+  const out = forward(features(s)).map((v, i) => s.mask[i] ? Math.max(0, v) : 0);
+  const t = out.reduce((a, b) => a + b, 0);
+  const n = s.mask.reduce((a, b) => a + b, 0);
+  return t > 0 ? out.map(v => v / t) : s.mask.map(m => m / n);
+}
+let spot = SPOTS.air;
+function renderSheet() {
+  const p = policy(spot), pct = v => Math.round(v * 100) + "%";
+  const bets = p[2] + p[3] + p[4];
+  let verdict;
+  if (spot.odds === 0) verdict = "Bets " + pct(bets);
+  else if (p[0] >= Math.max(p[1], bets)) verdict = "Folds " + pct(p[0]);
+  else if (p[1] >= bets) verdict = "Calls " + pct(p[1]);
+  else verdict = "Raises " + pct(bets);
+  $("#sVerdict").textContent = verdict;
+  $("#sActs").innerHTML = NAMES.map((name, i) => {
+    if (!spot.mask[i]) return "";
+    const label = i === 1 && spot.odds > 0 ? "Call" : name;
+    return `<div class="act"><span>${label}</span><span class="bar"><i style="width:${(p[i] * 100).toFixed(1)}%"></i></span><span>${pct(p[i])}</span></div>`;
+  }).join("");
+  $("#eqOut").textContent = Math.round(spot.eq * 100) + "%";
+}
+function pickSpot(key) {
+  spot = { ...SPOTS[key] };
+  $$(".river .names button").forEach(b => b.setAttribute("aria-pressed", b.dataset.spot === key));
+  const sheet = $("#sheet");
+  sheet.style.opacity = 0;
+  setTimeout(() => {
+    $("#sStreet").textContent = spot.title;
+    $("#sCards").innerHTML = spot.hole.map(card).join("") + (spot.board.length ? '<span class="gap"></span>' + spot.board.map(card).join("") : "");
+    $("#sNote").textContent = spot.note;
+    $("#eq").value = Math.round(spot.eq * 100);
+    renderSheet();
+    sheet.style.opacity = 1;
+  }, 200);
+}
+if (window.BOT) {
+  $$(".river .names button").forEach(b => b.addEventListener("click", () => pickSpot(b.dataset.spot)));
+  $("#eq").addEventListener("input", e => { spot.eq = e.target.value / 100; renderSheet(); });
+  renderSheet();
+}
+</script>
+</body>
+</html>
