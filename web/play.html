@@ -111,6 +111,7 @@ function renderLog(v, upto) {
 function renderControls(v) {
   const mine = !!v.legal && !busy;
   $("next").classList.toggle("hidden", !v.over || busy);
+  $("next").textContent = v.can_rebuy ? `Buy in for ${v.buyin} chips` : "Next hand";
   ["fold", "call", "raise"].forEach(id => $(id).classList.toggle("hidden", v.over));
   $("sizing").classList.toggle("hidden", v.over || !mine || !v.legal.actions.includes("raise") || v.legal.min === v.legal.max);
   if (!mine) { ["fold", "call", "raise"].forEach(id => $(id).disabled = true); return; }
@@ -192,7 +193,7 @@ async function send(path, body) {
 $("fold").onclick = () => send("/api/act", { action: "fold" });
 $("call").onclick = () => send("/api/act", { action: view.legal.actions.includes("call") ? "call" : "check" });
 $("raise").onclick = () => send("/api/act", { action: "raise", amount: +$("amtn").value });
-$("next").onclick = () => { shown = 0; send("/api/new", {}); };
+$("next").onclick = () => { shown = 0; send(view.can_rebuy ? "/api/rebuy" : "/api/new", {}); };
 $("amt").oninput = () => { $("amtn").value = $("amt").value; renderControls(view); };
 $("amtn").onchange = () => { $("amt").value = $("amtn").value; renderControls(view); };
 $("adapt").onchange = async () => { view = await api("/api/adapt", { on: $("adapt").checked }); renderProfile(view); };

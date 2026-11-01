@@ -26,8 +26,9 @@ class Session:
         self.bot, self.search = bot, search
         self.stack = bot.stack
         self.rng = random.Random()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.hands, self.net, self.g = 0, 0, None
+        self.stacks, self.buyins = [self.stack, self.stack], [1, 1]
         self.opp, self.adapt = Opponent(), True
         self.new_hand()
 
@@ -35,7 +36,11 @@ class Session:
         with self.lock:
             if self.g is not None and not self.g.hand_over:
                 return self._view()
-            self.g = GameState([self.stack, self.stack], self.hands % 2, self.rng)
+            assert self.stacks[HUMAN] > 0, "You are out of chips. Buy in to keep playing."
+            if self.stacks[BOT] == 0:
+                self.stacks[BOT] = self.stack
+                self.buyins[BOT] += 1
+            self.g = GameState(self.stacks[:], self.hands % 2, self.rng)
             self.g.start_hand(self.bot.sb, self.bot.bb)
             self.start = {"board": [], "pot": self.g.pot(), "stacks": self._behind(), "bets": self.g.street_bet[:]}
             self.events, self.decisions, self.bot_log = [], [], []
@@ -43,6 +48,13 @@ class Session:
             self.vpip = self.river_bet = False
             self._bot_moves()
             return self._view()
+
+    def rebuy(self, _=None):
+        with self.lock:
+            assert self.g.hand_over and self.stacks[HUMAN] == 0, "You still have chips."
+            self.stacks[HUMAN] = self.stack
+            self.buyins[HUMAN] += 1
+            return self.new_hand()
 
     def set_adapt(self, body):
         with self.lock:
@@ -118,6 +130,7 @@ class Session:
         g = self.g
         self.hands += 1
         self.net += g.net[HUMAN]
+        self.stacks = g.stacks[:]
         showdown = not any(g.folded)
         self.opp.end_hand(self.vpip, equity(g.hole[HUMAN], g.board) if self.river_bet and showdown else None)
         who = lambda i: "You" if i == HUMAN else "Bot"
@@ -128,6 +141,10 @@ class Session:
         else:
             w = g.winners[0]
             self.result = f"{who(w)} won {g.pot()} chips with {category_name(g.scores[w])}"
+        if self.stacks[HUMAN] == 0:
+            self.result += ". You are out of chips."
+        elif self.stacks[BOT] == 0:
+            self.result += f". The bot is out of chips and buys back in for {self.stack}."
 
     def _view(self):
         g = self.g
@@ -149,8 +166,11 @@ class Session:
                      "estimate of beating a random hand. On the river it re-solves the spot in real time against "
                      "the range of hands your betting suggests.",
             "stats": {"hands played": self.hands, "your result": f"{signed(self.net)} chips",
-                      "your win rate": f"{signed(rate)} bb/100", "river search": "on" if self.search else "off",
-                      "bot trained": f"{self.bot.t} iterations"},
+                      "your win rate": f"{signed(rate)} bb/100", "your stack": f"{self.stacks[HUMAN]} chips",
+                      "bot stack": f"{self.stacks[BOT]} chips",
+                      "buy-ins": f"you {self.buyins[HUMAN]}, bot {self.buyins[BOT]}",
+                      "river search": "on" if self.search else "off", "bot trained": f"{self.bot.t} iterations"},
+            "can_rebuy": g.hand_over and self.stacks[HUMAN] == 0, "buyin": self.stack,
             "profile": self.opp.summary(), "adapt": self.adapt,
             "button": g.button,
             "hole": [[card_str(c) for c in g.hole[HUMAN]],
@@ -180,7 +200,7 @@ def main():
     session = Session(bot, search=not args.no_search)
     serve({("GET", "/api/state"): session.state, ("POST", "/api/new"): session.new_hand,
            ("POST", "/api/act"): session.act, ("POST", "/api/adapt"): session.set_adapt,
-           ("POST", "/api/forget"): session.forget}, args.port, "play.html", not args.no_browser)
+           ("POST", "/api/forget"): session.forget, ("POST", "/api/rebuy"): session.rebuy}, args.port, "play.html", not args.no_browser)
     print(f"Hold'em bot, {bot.t} Deep CFR iterations, river search {'on' if session.search else 'off'}. Ctrl+C to quit.")
     try:
         while True:
