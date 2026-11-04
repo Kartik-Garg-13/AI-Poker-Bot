@@ -4,9 +4,11 @@ from pathlib import Path
 
 import numpy as np
 
-from abstraction import ALLIN, CALL, FOLD, HALF, POT
+from abstraction import ALLIN, BETS, CALL, FOLD, N_ACTIONS
 
 PROFILE = Path(__file__).parent / "models" / "opponent_profile.json"
+SIZED = [a for a in BETS if a != ALLIN]
+MAX_SHIFT = 0.3
 
 TRAITS = {
     "fold_to_bet": ("folds when bet into", 0.40, 12),
@@ -14,7 +16,6 @@ TRAITS = {
     "vpip": ("plays the hand preflop", 0.65, 15),
     "river_bluff": ("river bets that were bluffs", 0.30, 6),
 }
-BETS = [HALF, POT, ALLIN]
 
 
 class Opponent:
@@ -56,7 +57,7 @@ class Opponent:
         if not facing:
             push = (fold - TRAITS["fold_to_bet"][1]) * fold_conf
             if eq < 0.4 and abs(push) > 0.02:
-                w[BETS] *= math.exp(4 * push)
+                w[SIZED if push > 0 else BETS] *= math.exp(4 * push)
                 notes.append(f"{'bluffing more' if push > 0 else 'bluffing less'}: you fold {fold:.0%} when bet into")
             elif eq > 0.65 and push < -0.02:
                 w[BETS] *= math.exp(-4 * push)
@@ -71,7 +72,14 @@ class Opponent:
                 notes.append(f"{'calling lighter' if push > 0 else 'folding more'}: you bet or raise {aggr:.0%} of the time")
         w = np.clip(w, 0.25, 4.0)
         p = probs * w * mask
-        return (p / p.sum() if p.sum() > 0 else probs), notes
+        if p.sum() <= 0:
+            return probs, notes
+        p = p / p.sum()
+        shift = 0.5 * np.abs(p - probs).sum()
+        cap = MAX_SHIFT * max(fold_conf, self.rate("aggression")[1])
+        if shift > cap:
+            p = probs + (p - probs) * cap / shift
+        return p, notes
 
     def summary(self):
         out = []
@@ -84,8 +92,8 @@ class Opponent:
 
 if __name__ == "__main__":
     import tempfile
-    probs = np.array([0, 0.7, 0.1, 0.1, 0.1])
-    mask = np.ones(5)
+    probs = np.array([0, 0.7] + [0.3 / len(BETS)] * len(BETS))
+    mask = np.ones(N_ACTIONS)
     with tempfile.TemporaryDirectory() as tmp:
         folder = Opponent(Path(tmp) / "a.json")
         station = Opponent(Path(tmp) / "b.json")
@@ -97,6 +105,9 @@ if __name__ == "__main__":
         print(f"weak-hand bet frequency: {probs[BETS].sum():.2f} baseline, "
               f"{bluff_vs_folder:.2f} vs a folder, {bluff_vs_station:.2f} vs a calling station")
         assert bluff_vs_folder > probs[BETS].sum() > bluff_vs_station
+        shifted = folder.adjust(probs, mask, False, 0.2)[0]
+        assert 0.5 * np.abs(shifted - probs).sum() <= MAX_SHIFT + 1e-9, "exploiting must stay near the blueprint"
+        assert shifted[ALLIN] <= probs[ALLIN] + 1e-9, "never bluff-shove more"
         folder.end_hand(False, None)
         assert Opponent(Path(tmp) / "a.json").c["fold_to_bet_n"] == 60, "profile must persist"
     print("opponent self-check passed")

@@ -1,0 +1,50 @@
+{
+  "iterations": 1000,
+  "chosen": "snapshot ensemble (SD-CFR)",
+  "hands_per_depth": 20000,
+  "vs_v1": {
+    "snapshot ensemble (SD-CFR)": {
+      "10bb": [
+        15.9,
+        2.9
+      ],
+      "30bb": [
+        1.5,
+        6.1
+      ],
+      "100bb": [
+        0.9,
+        13.7
+      ]
+    },
+    "average-strategy net": {
+      "10bb": [
+        6.4,
+        2.9
+      ],
+      "30bb": [
+        -0.7,
+        5.7
+      ],
+      "100bb": [
+        -29.8,
+        19.8
+      ]
+    },
+    "latest iteration": {
+      "10bb": [
+        59.3,
+        3.6
+      ],
+      "30bb": [
+        32.4,
+        8.6
+      ],
+      "100bb": [
+        -51.1,
+        23.0
+      ]
+    }
+  },
+  "note": "re-picked by worst depth; LBR at 100bb: ensemble +72.7+/-76.7, latest +727.7+/-73.3"
+}

@@ -7,13 +7,13 @@ import threading
 import time
 from pathlib import Path
 
-from abstraction import (ACTION_NAMES, ALLIN, HALF, N_ACTIONS, POT, describe, equity, legal_mask,
-                         nearest_abstract, raise_to, to_engine)
+from abstraction import (ACTION_NAMES, BETS, N_ACTIONS, describe, equity, legal_mask, raise_to, to_engine,
+                         translate)
 from cards import card_str, category_name
 from deep_cfr import BotPolicy, sample_action
 from engine import STREETS, GameState
 from opponent import Opponent
-from search import resolve_river
+from search import resolve
 from webui import serve
 
 HUMAN, BOT = 0, 1
@@ -51,6 +51,7 @@ class Session:
                 self.buyins[BOT] += 1
             self.g = GameState(self.stacks[:], self.hands % 2, self.rng)
             self.g.start_hand(self.bot.sb, self.bot.bb)
+            self.bot.new_hand(self.rng)
             self.start = {"board": [], "pot": self.g.pot(), "stacks": self._behind(), "bets": self.g.street_bet[:]}
             self.events, self.decisions, self.bot_log, self.moves = [], [], [], []
             self.result = None
@@ -95,7 +96,7 @@ class Session:
     def _apply(self, p, action, amount):
         g = self.g
         snap, seen = g.clone(), len(g.board)
-        abstract = nearest_abstract(g, action, amount)
+        abstract = translate(g, action, amount)
         text = describe(g, action, amount)
         if p == HUMAN:
             self.opp.on_action(g.owed() > 0, action)
@@ -118,8 +119,8 @@ class Session:
         g = self.g
         while not g.hand_over and g.to_act == BOT:
             info = None
-            if self.search and g.street == 3:
-                probs, info = resolve_river(g, self.decisions, self.bot, rng=self.rng)
+            if self.search and g.street >= self.search:
+                probs, info = resolve(g, self.decisions, self.bot, rng=self.rng)
             else:
                 probs = self.bot.probs(g)
             mask = legal_mask(g)
@@ -177,8 +178,7 @@ class Session:
             m = legal_mask(g)
             legal = {"actions": g.legal_actions(), "call": min(g.owed(), g.stacks[HUMAN]),
                      "min": g.min_raise_to(), "max": g.max_raise_to(),
-                     "presets": {name: raise_to(g, a) for name, a in
-                                 (("1/2 pot", HALF), ("pot", POT), ("all-in", ALLIN)) if m[a]}}
+                     "presets": {ACTION_NAMES[a].replace("bet ", ""): raise_to(g, a) for a in BETS if m[a]}}
         bb = self.bot.bb
         hand_no = self.hands + (0 if g.hand_over else 1)
         rate = round(100 * self.net / bb / self.hands, 1) if self.hands else 0
@@ -194,7 +194,7 @@ class Session:
                       "bot stack": f"{self.stacks[BOT]} chips",
                       "buy-ins": f"you {self.buyins[HUMAN]}, bot {self.buyins[BOT]}",
                       "all-time": f"{self.all_hands} hands, {signed(self.all_net)} chips",
-                      "river search": "on" if self.search else "off", "bot trained": f"{self.bot.t} iterations"},
+                      "live search": {0: "off", 2: "turn and river", 3: "river"}[self.search], "bot trained": f"{self.bot.t} iterations"},
             "can_rebuy": g.hand_over and self.stacks[HUMAN] == 0, "buyin": self.stack,
             "profile": self.opp.summary(), "adapt": self.adapt,
             "button": g.button,
@@ -211,8 +211,9 @@ class Session:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="models/deepcfr_holdem.npz")
-    ap.add_argument("--no-search", action="store_true", help="turn off the live river re-solve")
+    ap.add_argument("--model", default="models/v2_holdem.npz")
+    ap.add_argument("--search", choices=["off", "river", "turn"], default="turn",
+                    help="re-solve the spot in real time from this street on (turn: ~5s per decision)")
     ap.add_argument("--port", type=int, default=8767)
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
@@ -222,11 +223,11 @@ def main():
     bot = BotPolicy(args.model)
     if not bot.has_strat:
         print("This checkpoint has no average-strategy net yet, so the bot uses its last iteration's strategy.")
-    session = Session(bot, search=not args.no_search)
+    session = Session(bot, search={"off": 0, "river": 3, "turn": 2}[args.search])
     serve({("GET", "/api/state"): session.state, ("POST", "/api/new"): session.new_hand,
            ("POST", "/api/act"): session.act, ("POST", "/api/adapt"): session.set_adapt,
            ("POST", "/api/forget"): session.forget, ("POST", "/api/rebuy"): session.rebuy}, args.port, "play.html", not args.no_browser)
-    print(f"Hold'em bot, {bot.t} Deep CFR iterations, river search {'on' if session.search else 'off'}. Ctrl+C to quit.")
+    print(f"Hold'em bot, {bot.t} Deep CFR iterations, search: {args.search}. Ctrl+C to quit.")
     try:
         while True:
             time.sleep(1)

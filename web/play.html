@@ -123,7 +123,7 @@ function renderControls(v) {
   if (L.actions.includes("raise")) {
     const a = $("amt"), n = $("amtn");
     if (+a.min !== L.min || +a.max !== L.max) {
-      a.min = n.min = L.min; a.max = n.max = L.max; a.value = n.value = L.presets["1/2 pot"] || L.min;
+      a.min = n.min = L.min; a.max = n.max = L.max; a.value = n.value = L.presets["1/2 pot"] || L.presets["3/4 pot"] || L.min;
     }
     $("raise").textContent = (v.bets[0] === 0 && v.bets[1] === 0 ? "Bet " : "Raise to ") + n.value;
     $("presets").innerHTML = Object.entries(L.presets).map(([k, x]) => `<button data-x="${x}">${k}</button>`).join("");

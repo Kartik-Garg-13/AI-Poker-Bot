@@ -5,3 +5,7 @@ models/*.tmp
 models/hand_history.jsonl
 submission/
 .taste-skill/
+models/snapshots/
+models/*.stop
+models/*_previous.npz
+models/*.log

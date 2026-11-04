@@ -2,8 +2,8 @@ import random
 
 import numpy as np
 
-from abstraction import N_ACTIONS, apply_abstract, equity, features, legal_mask
-from cards import evaluate_fast
+from abstraction import N_ACTIONS, apply_abstract, equity, evaluate_batch, features, legal_mask, translate
+from engine import GameState
 
 
 def sample_hands(dead, k, rng):
@@ -13,13 +13,17 @@ def sample_hands(dead, k, rng):
 
 
 def range_weights(hands, decisions, who, blueprint):
-    w = np.ones(len(hands))
-    for snap, actor, a in decisions:
+    steps = []
+    for snap, actor, mix in decisions:
         if actor != who:
             continue
-        X = np.array([features(snap, actor, equity(list(h), snap.board)) for h in hands])
+        X = np.array([features(snap, actor, h) for h in hands])
         masks = np.tile(legal_mask(snap), (len(hands), 1))
-        w *= blueprint.probs_x(X, masks, actor)[:, a]
+        aw = np.zeros(N_ACTIONS)
+        for a, share in mix:
+            aw[a] += share
+        steps.append((X, masks, aw))
+    w = np.broadcast_to(blueprint.likelihood(steps, who), (len(hands),)) if steps else np.ones(len(hands))
     if w.sum() <= 0:
         w = np.ones(len(hands))
     return w / w.sum()
@@ -28,9 +32,9 @@ def range_weights(hands, decisions, who, blueprint):
 class Node:
     __slots__ = ("player", "actions", "children", "fold_by", "contrib", "regret", "strat_sum")
 
-    def __init__(self, g):
+    def __init__(self, g, street):
         self.regret = self.strat_sum = None
-        if g.hand_over:
+        if g.hand_over or g.street != street:
             self.player, self.contrib = None, list(g.contributed)
             self.fold_by = g.folded.index(True) if any(g.folded) else None
             return
@@ -40,7 +44,7 @@ class Node:
         for a in self.actions:
             c = g.clone()
             apply_abstract(c, a)
-            self.children.append(Node(c))
+            self.children.append(Node(c, street))
 
 
 def _rm(R):
@@ -48,14 +52,25 @@ def _rm(R):
     return np.where(s > 0, R / np.where(s > 0, s, 1), 1 / R.shape[1])
 
 
-class RiverSolver:
+def showdown_matrix(board, hands):
+    V = np.array([[not set(a) & set(b) for b in hands[1]] for a in hands[0]], float)
+    rivers = [c for c in range(52) if c not in board] if len(board) == 4 else [None]
+    S, ok = [], []
+    for hs in hands:
+        rows = [list(h) + board + ([r] if r is not None else []) for h in hs for r in rivers]
+        S.append(evaluate_batch(np.array(rows)).reshape(len(hs), len(rivers)))
+        ok.append(np.array([[r not in h for r in rivers] for h in hs], float))
+    both = np.einsum("ir,jr->ijr", ok[0], ok[1])
+    wins = (np.sign(S[0][:, None, :] - S[1][None, :, :]) * both).sum(2)
+    return wins / np.maximum(both.sum(2), 1) * V, V
+
+
+class Solver:
     def __init__(self, g, bot, hands, weights):
         self.bot = bot
-        score = [np.array([evaluate_fast(list(h) + g.board) for h in hs]) for hs in hands]
-        self.V = np.array([[not set(a) & set(b) for b in hands[1]] for a in hands[0]], float)
-        self.M = np.sign(score[0][:, None] - score[1][None, :]) * self.V
+        self.M, self.V = showdown_matrix(g.board, hands)
         self.r = weights
-        self.root = Node(g)
+        self.root = Node(g, g.street)
         self.t = 0
 
     def _side(self, n):
@@ -114,7 +129,19 @@ class RiverSolver:
         return (b0 + b1) / 2 / (r0 @ self.V @ r1)
 
 
-def resolve_river(g, decisions, blueprint, n_hands=100, iters=400, rng=None):
+def replay_decisions(g):
+    r = GameState(g.start_stacks, g.button)
+    dealt = [g.hole[0][0], g.hole[1][0], g.hole[0][1], g.hole[1][1], *g.board]
+    r.deck = [c for c in r.deck if c not in dealt] + dealt[::-1]
+    r.start_hand(g.bb // 2, g.bb)
+    out = []
+    for _, p, action, amount in g.history:
+        out.append((r.clone(), p, translate(r, action, amount)))
+        r.apply_action(action, amount)
+    return out
+
+
+def resolve(g, decisions, blueprint, n_hands=100, iters=400, rng=None):
     rng = rng or random.Random()
     bot = g.to_act
     me = tuple(sorted(g.hole[bot]))
@@ -123,7 +150,7 @@ def resolve_river(g, decisions, blueprint, n_hands=100, iters=400, rng=None):
     opp_hands = sample_hands(dead, n_hands, rng)
     weights = [range_weights(bot_hands, decisions, bot, blueprint),
                range_weights(opp_hands, decisions, 1 - bot, blueprint)]
-    solver = RiverSolver(g, bot, [bot_hands, opp_hands], weights)
+    solver = Solver(g, bot, [bot_hands, opp_hands], weights)
     solver.solve(iters)
     probs = np.zeros(N_ACTIONS)
     probs[solver.root.actions] = _rm(solver.root.strat_sum)[0]
@@ -144,7 +171,7 @@ if __name__ == "__main__":
         g.apply_action("check")
         g.apply_action("check")
     hands = [sample_hands(set(g.board), 80, rng) for _ in range(2)]
-    s = RiverSolver(g, g.to_act, hands, [np.ones(80) / 80, np.ones(80) / 80])
+    s = Solver(g, g.to_act, hands, [np.ones(80) / 80, np.ones(80) / 80])
     s.solve(10)
     e10 = s.exploitability()
     s.solve(390)
@@ -152,4 +179,19 @@ if __name__ == "__main__":
     print(f"river subgame exploitability: {100 * e10 / g.pot():.2f}% pot after 10 iters, "
           f"{100 * e400 / g.pot():.2f}% after 400")
     assert e400 < e10 / 10 and e400 / g.pot() < 0.03
+    t = GameState([200, 200], 0, random.Random(4))
+    t.start_hand()
+    t.apply_action("call")
+    t.apply_action("check")
+    while t.street < 2:
+        t.apply_action("check")
+    hands = [sample_hands(set(t.board), 60, rng) for _ in range(2)]
+    M, V = showdown_matrix(t.board, hands)
+    assert np.abs(M).max() <= 1 and (M[V == 0] == 0).all()
+    ts = Solver(t, t.to_act, hands, [np.ones(60) / 60, np.ones(60) / 60])
+    ts.solve(400)
+    print(f"turn subgame exploitability after 400 iters: {100 * ts.exploitability() / t.pot():.2f}% pot")
+    assert ts.exploitability() / t.pot() < 0.05
+    d = replay_decisions(g)
+    assert [x[1] for x in d] == [h[1] for h in g.history] and d[-1][0].board == g.board[:4]
     print("search self-check passed")

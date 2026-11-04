@@ -12,7 +12,7 @@ from webui import serve
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="models/deepcfr_holdem.npz")
+    ap.add_argument("--model", default="models/v2_holdem.npz")
     ap.add_argument("--port", type=int, default=8768)
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
@@ -25,7 +25,8 @@ def main():
     if "strat_W0" in data:
         nets.append(network_view(MLP.from_arrays(data, "strat_"), f"Average-strategy net (the one that plays) - {iters} iterations", "strategy"))
     for p in (0, 1):
-        nets.append(network_view(MLP.from_arrays(data, f"adv{p}_"), f"Advantage net, player {p} - {iters} iterations"))
+        note = f" (the bot plays a mix of {len(data['snap_iter'])} saved iterations; this is the last)" if "snap_iter" in data else ""
+        nets.append(network_view(MLP.from_arrays(data, f"adv{p}_"), f"Advantage net, player {p} - {iters} iterations{note}"))
 
     serve({("GET", "/api/nets"): lambda _: {"nets": nets}}, args.port, "network.html", not args.no_browser)
     print("Ctrl+C to quit.")

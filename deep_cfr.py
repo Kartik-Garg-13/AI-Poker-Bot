@@ -32,6 +32,11 @@ class Reservoir:
         self.X[i], self.Y[i], self.M[i], self.T[i] = x, y, m, t
         self.seen += 1
 
+    def add_many(self, rows):
+        if rows is not None:
+            for r in zip(*rows):
+                self.add(*r)
+
     def batch(self, k):
         i = self.rng.integers(0, self.size, k)
         return self.X[i], self.Y[i], self.M[i], self.T[i]
@@ -46,6 +51,20 @@ class Reservoir:
         self.X[:n], self.Y[:n] = data[f"{prefix}X"][:n], data[f"{prefix}Y"][:n]
         self.M[:n], self.T[:n] = data[f"{prefix}M"][:n], data[f"{prefix}T"][:n]
         self.size, self.seen = n, max(int(data[f"{prefix}seen"]), n)
+
+
+class Collector:
+    def __init__(self):
+        self.rows = []
+
+    def add(self, x, y, m, t):
+        self.rows.append((x, y, m, t))
+
+    def arrays(self):
+        if not self.rows:
+            return None
+        X, Y, M, T = zip(*self.rows)
+        return np.array(X), np.array(Y), np.array(M), np.array(T, np.float32)
 
 
 class DeepCFR:
@@ -129,7 +148,7 @@ class DeepCFR:
             self.adv_mem[p].add(x, (vals - ev) * mask, mask, self.t)
             return ev
         self.strat_mem.add(x, sigma, mask, self.t)
-        apply_abstract(g, self.rng.choices(range(N_ACTIONS), sigma)[0])
+        apply_abstract(g, sample_action(sigma, self.rng))
         return self.traverse(g, p)
 
     def train(self, net, mem, steps, batch=512, lr=1e-3, every=None, callback=None):
@@ -163,26 +182,114 @@ class DeepCFR:
             d.update(self.strat.arrays("strat_"))
         np.savez(path, **d, meta=np.array([self.stack, self.sb, self.bb, self.t]))
 
+    def save_snapshot(self, folder):
+        folder.mkdir(parents=True, exist_ok=True)
+        d = {}
+        for i in (0, 1):
+            d.update({k: v.astype(np.float16) for k, v in self.adv[i].arrays(f"adv{i}_").items()})
+        np.savez(folder / f"iter_{self.t:05d}.npz", **d)
+
+
+_worker = None
+
+
+def worker_init(cfg):
+    global _worker
+    _worker = DeepCFR(cfg["stack"], hidden=cfg["hidden"], memory=1, seed=cfg["seed"] + os.getpid(),
+                      stack_range=cfg["stack_range"])
+    _worker.bust_penalty = cfg["bust_penalty"]
+
+
+def worker_traverse(job):
+    d = _worker
+    d.adv = [MLP.from_arrays(job["nets"], f"adv{i}_") for i in (0, 1)]
+    d.trained, d.t, d.finite = job["trained"], job["t"], job["finite"]
+    d.human_hands, d.human_share = job["human"], job["human_share"]
+    d.adv_mem, d.strat_mem = [Collector(), Collector()], Collector()
+    for _ in range(job["n"]):
+        d.step(job["p"])
+    return d.adv_mem[job["p"]].arrays(), d.strat_mem.arrays(), d.session[:], d.busts[:]
+
+
+def pack_ensemble(folder, out, meta, n=64):
+    files = sorted(folder.glob("iter_*.npz"))
+    pick = [files[round(i)] for i in np.linspace(0, len(files) - 1, min(n, len(files)))]
+    pick = list(dict.fromkeys(pick))
+    snaps = [dict(np.load(f)) for f in pick]
+    d = {"snap_iter": np.array([int(f.stem.split("_")[1]) for f in pick])}
+    for key in snaps[0]:
+        if key.startswith("adv0_"):
+            name = key[5:]
+            d[f"snap_{name}"] = np.stack([np.stack([s[f"adv0_{name}"], s[f"adv1_{name}"]]) for s in snaps])
+    for i in (0, 1):
+        d.update({k: v.astype(np.float32) for k, v in snaps[-1].items() if k.startswith(f"adv{i}_")})
+    np.savez(out, **d, meta=np.array(meta))
+
+
+def regret_matching_batch(adv, mask):
+    pos = np.maximum(adv, 0) * mask
+    tot = pos.sum(-1, keepdims=True)
+    best = np.argmax(np.where(mask > 0, adv, -np.inf), -1)
+    greedy = (np.arange(adv.shape[-1]) == best[..., None]).astype(adv.dtype)
+    return np.where(tot > 0, pos / np.where(tot > 0, tot, 1), greedy)
+
 
 class BotPolicy:
     def __init__(self, path):
         data = dict(np.load(path))
         self.stack, self.sb, self.bb, self.t = (int(v) for v in data["meta"])
-        self.has_strat = "strat_W0" in data
-        self.strat = MLP.from_arrays(data, "strat_") if self.has_strat else None
+        self.kind = "ensemble" if "snap_W0" in data else "strategy" if "strat_W0" in data else "advantage"
+        self.has_strat = self.kind != "advantage"
+        self.strat = MLP.from_arrays(data, "strat_") if self.kind == "strategy" else None
         self.adv = [MLP.from_arrays(data, f"adv{i}_") for i in (0, 1)]
+        if self.kind == "ensemble":
+            n = sum(1 for k in data if k.startswith("snap_W"))
+            self.W = [data[f"snap_W{i}"].astype(np.float32) for i in range(n)]
+            self.b = [data[f"snap_b{i}"].astype(np.float32) for i in range(n)]
+            self.weights = data["snap_iter"] / data["snap_iter"].sum()
+        self.k = None
+
+    def new_hand(self, rng):
+        if self.kind == "ensemble":
+            self.k = rng.choices(range(len(self.weights)), self.weights.tolist())[0]
+
+    def _snap_probs(self, X, masks, player, k=slice(None)):
+        h = X
+        for i, (W, b) in enumerate(zip(self.W, self.b)):
+            h = h @ W[k, player] + b[k, player][..., None, :]
+            if i < len(self.W) - 1:
+                h = np.maximum(h, 0)
+        return regret_matching_batch(h, masks)
 
     def probs_x(self, X, masks, player):
-        if self.has_strat:
+        if self.kind == "ensemble":
+            if self.k is not None:
+                return self._snap_probs(X, masks, player, self.k)
+            return np.tensordot(self.weights, self._snap_probs(X, masks, player), 1)
+        if self.kind == "strategy":
             return np.array([normalize_policy(o, m) for o, m in zip(self.strat.predict(X), masks)])
-        return np.array([regret_matching(o, m) for o, m in zip(self.adv[player].predict(X), masks)])
+        return regret_matching_batch(self.adv[player].predict(X), masks)
+
+    def likelihood(self, steps, player):
+        if self.kind != "ensemble":
+            out = 1.0
+            for X, masks, aw in steps:
+                out = out * (self.probs_x(X, masks, player) @ aw)
+            return out
+        out = 1.0
+        for X, masks, aw in steps:
+            out = out * (self._snap_probs(X, masks, player) @ aw)
+        return self.weights @ out if steps else np.ones(1)
 
     def probs(self, g):
         return self.probs_x(features(g, g.to_act)[None], legal_mask(g)[None], g.to_act)[0]
 
+    def act(self, g, rng):
+        return to_engine(g, sample_action(self.probs(g), rng))
+
 
 def sample_action(probs, rng):
-    return rng.choices(range(N_ACTIONS), probs)[0]
+    return rng.choices(range(len(probs)), np.asarray(probs, float).tolist())[0]
 
 
 def play_match(probs_a, probs_b, hands, stack=200, seed=0):
@@ -249,13 +356,22 @@ def _pf(hand):
     return equity([ranks.index(t[0]) * 4 + suits.index(t[1]) for t in hand.split()], [])
 
 
+def _probe(street, eq, pot, owed, stacks, in_pos, raises, opp_raises, my_raises, shape):
+    total = 400
+    eff = min(stacks)
+    return lambda: raw_features(street, eq, pot / total, owed / (pot + owed), stacks[0] / total, stacks[1] / total,
+                                in_pos, raises / 3, opp_raises / 4, my_raises / 4, np.log1p(eff / 2) / np.log1p(250),
+                                np.log1p(eff / pot) / np.log1p(100), *shape, 0, float(opp_raises > 0 and street > 0))
+
+
 PROBES = [
-    ("Preflop: AA on the button, first to act", lambda: raw_features(0, _pf("AS AH"), 3 / 400, 1 / 4, 199 / 400, 198 / 400, 1, 0, 0, 0)),
-    ("Preflop: 7-2 offsuit on the button", lambda: raw_features(0, _pf("7S 2H"), 3 / 400, 1 / 4, 199 / 400, 198 / 400, 1, 0, 0, 0)),
-    ("Flop: top pair (eq .80), facing a pot bet", lambda: raw_features(1, 0.80, 24 / 400, 8 / 24, 192 / 400, 184 / 400, 0, 1, 1, 0)),
-    ("River: near-nuts (eq .97), checked to me", lambda: raw_features(3, 0.97, 40 / 400, 0, 180 / 400, 180 / 400, 1, 0, 0, 1)),
-    ("River: air (eq .08), checked to me -- bluff?", lambda: raw_features(3, 0.08, 40 / 400, 0, 180 / 400, 180 / 400, 1, 0, 0, 1)),
-    ("River: bluff-catcher (eq .55), facing all-in", lambda: raw_features(3, 0.55, 220 / 400, 180 / 220, 180 / 400, 0, 0, 1, 2, 0)),
+    ("Preflop: AA on the button, first to act", lambda: _probe(0, _pf("AS AH"), 3, 1, (199, 198), 1, 0, 0, 0, (1 / 8, 0, 0, 0, 0, 0, 0))()),
+    ("Preflop: 7-2 offsuit on the button", lambda: _probe(0, _pf("7S 2H"), 3, 1, (199, 198), 1, 0, 0, 0, (0,) * 7)()),
+    ("Flop: top pair (eq .80), facing a pot bet", _probe(1, 0.80, 24, 8, (192, 184), 0, 1, 1, 0, (1 / 8, 0, 0, 0, 0, 1, 1))),
+    ("Flop: flush draw (eq .45), checked to me", _probe(1, 0.45, 8, 0, (196, 196), 1, 0, 0, 0, (0, 1, 0, 0, 0, 0, 1))),
+    ("River: near-nuts (eq .97), checked to me", _probe(3, 0.97, 40, 0, (180, 180), 1, 0, 0, 1, (5 / 8, 0, 0, 0, 1 / 3, 0, 1))),
+    ("River: air (eq .08), checked to me -- bluff?", _probe(3, 0.08, 40, 0, (180, 180), 1, 0, 0, 1, (0, 0, 0, 0, 0, 1, 1))),
+    ("River: bluff-catcher (eq .55), facing all-in", _probe(3, 0.55, 220, 180, (180, 0), 0, 1, 2, 0, (2 / 8, 0, 0, 1, 0, 0, 1))),
 ]
 
 
