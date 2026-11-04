@@ -9,3 +9,4 @@ models/snapshots/
 models/*.stop
 models/*_previous.npz
 models/*.log
+models/slumbot_*.jsonl

@@ -6,6 +6,7 @@ from multiprocessing import Pool
 
 import numpy as np
 
+import abstraction
 from abstraction import CALL, features, legal_mask, regret_matching, to_engine
 from deep_cfr import BotPolicy, sample_action
 from engine import GameState
@@ -46,7 +47,8 @@ class SearchBot:
         from search import replay_decisions, resolve
         if g.street < self.street:
             return self.bot.act(g, rng)
-        probs, _ = resolve(g, replay_decisions(g), self.bot, rng=rng)
+        decisions = replay_decisions(g, getattr(self.bot, "lib", abstraction).translate)
+        probs, _ = resolve(g, decisions, self.bot, rng=rng)
         return to_engine(g, sample_action(probs, rng))
 
 

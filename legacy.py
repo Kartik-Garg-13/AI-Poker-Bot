@@ -1,4 +1,5 @@
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -55,7 +56,17 @@ def translate(g, action, amount):
     if action in ("check", "call"):
         return [(CALL, 1.0)]
     m = legal_mask(g)
-    return [(next(a for a in (HALF, POT, ALLIN) if m[a] and raise_to(g, a) == amount), 1.0)]
+    base = g.pot() + g.owed()
+    frac = lambda amt: (amt - max(g.street_bet)) / base
+    sizes = sorted((frac(raise_to(g, a)), a) for a in (HALF, POT, ALLIN) if m[a])
+    x = frac(amount)
+    if x <= sizes[0][0]:
+        return [(sizes[0][1], 1.0)]
+    for (lo, a), (hi, b) in zip(sizes, sizes[1:]):
+        if x <= hi:
+            f = (hi - x) * (1 + lo) / ((hi - lo) * (1 + x))
+            return [(a, f), (b, 1 - f)]
+    return [(sizes[-1][1], 1.0)]
 
 
 def to_engine(g, a):
@@ -68,6 +79,7 @@ def to_engine(g, a):
 
 class V1Bot:
     name = "v1 bot"
+    lib = sys.modules[__name__]
 
     def __init__(self, path=MODEL):
         self.net = MLP.from_arrays(dict(np.load(path)), "strat_")

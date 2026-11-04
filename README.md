@@ -1,7 +1,7 @@
 # AI Poker Bot — Heads-up No-Limit Texas Hold'em
 
 A Hold'em bot that learns from self-play with Deep CFR (the algorithm family behind Libratus and Pluribus),
-then re-solves the turn and river in real time while it plays. Only dependency: `numpy`.
+with optional real-time re-solving of the turn and river. Only dependency: `numpy`.
 
 ## Run it
 
@@ -17,8 +17,9 @@ The shipped bot is `models/v2_holdem.npz` and `play.py` loads it every time. It 
 take ~15 min. Running `train_deep_cfr.py` again continues from the saved bot (`--fresh` starts over); self-play runs
 on all but 4 cores (`--workers`). To stop early and still get a finished bot, create `models/v2_holdem.stop`.
 
-`play.py --search turn|river|off` picks where real-time search starts. Default `turn` (~5 s per turn/river decision);
-`river` is faster and weaker.
+`play.py --search turn|river` turns on real-time search from that street (~5 s per decision on the turn). It is off
+by default: search guesses the opponent's cards from what the bot itself would have done, so it beats a copy of the
+bot but loses to anyone who plays differently (see below).
 
 The training page has a **Reset stacks after every hand** checkbox. Untick it (or start with `--finite`) and chips carry over
 between self-play hands, a broke bot buys back in, and going broke counts as an extra loss (`--bust-penalty`), so the
@@ -39,8 +40,13 @@ best at its *worst* stack depth against v1.
 | v2 vs v1, 20,000 duplicate hands per depth | — | 10bb +15.9 ± 2.9 · 30bb +1.5 ± 6.1 · 100bb +0.9 ± 13.7 |
 | Local best response wins, 3000 hands at 100bb (lower = harder to exploit) | -104 ± 55 | +73 ± 77 |
 | vs [Slumbot](https://slumbot.com), 1000 hands at 200bb | +0.7 ± 77.2 | +20.3 ± 67.2 |
-| Turn search vs no search, 4000 duplicate hands at 100bb | — | +106.7 ± 27.9 |
-| River search vs no search, same | — | +56.0 ± 40.0 |
+| Turn search vs the same bot without search, 4000 duplicate hands at 100bb | — | +106.7 ± 27.9 |
+| v2 + turn search vs v1, same | — | -70.5 ± 32.7 |
+| v2 + river search vs v1, same | — | -34.3 ± 30.3 |
+| v2 + turn search vs Slumbot, 1980 hands, all-in luck removed | — | -169 ± 51 |
+
+Search wins only against the network it takes its range estimates from. Making it safe against other opponents
+(e.g. safe subgame solving) is open work.
 
 Of the candidates, the latest iteration alone beat v1 by +59 at 10bb, but local best response won +728 ± 73 from it,
 so it is not shipped. The LBR here is simple (it calls preflop) and even loses to v1, so treat it as a leak detector,
@@ -48,9 +54,9 @@ not an exploitability bound.
 
 ```
 python evaluate.py models/v2_holdem.npz v1 --hands 20000          # head to head at 10/30/100bb
-python evaluate.py turn:models/v2_holdem.npz models/v2_holdem.npz # does search help
+python evaluate.py turn:models/v2_holdem.npz v1                   # does search help (also river:, turn:v1)
 python lbr.py models/v2_holdem.npz v1 --hands 3000                # local best response
-python slumbot.py models/v2_holdem.npz --hands 1000               # vs slumbot.com (needs internet)
+python slumbot.py models/v2_holdem.npz --hands 1000               # vs slumbot.com; logs every hand, reruns add to it
 ```
 
 ## Self-checks

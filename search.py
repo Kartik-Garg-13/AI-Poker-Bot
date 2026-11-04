@@ -2,7 +2,8 @@ import random
 
 import numpy as np
 
-from abstraction import N_ACTIONS, apply_abstract, equity, evaluate_batch, features, legal_mask, translate
+import abstraction
+from abstraction import N_ACTIONS, apply_abstract, equity, evaluate_batch, legal_mask, translate
 from engine import GameState
 
 
@@ -13,13 +14,14 @@ def sample_hands(dead, k, rng):
 
 
 def range_weights(hands, decisions, who, blueprint):
+    lib = getattr(blueprint, "lib", abstraction)
     steps = []
     for snap, actor, mix in decisions:
         if actor != who:
             continue
-        X = np.array([features(snap, actor, h) for h in hands])
-        masks = np.tile(legal_mask(snap), (len(hands), 1))
-        aw = np.zeros(N_ACTIONS)
+        X = np.array([lib.features(snap, actor, h) for h in hands])
+        masks = np.tile(lib.legal_mask(snap), (len(hands), 1))
+        aw = np.zeros(masks.shape[1])
         for a, share in mix:
             aw[a] += share
         steps.append((X, masks, aw))
@@ -129,7 +131,7 @@ class Solver:
         return (b0 + b1) / 2 / (r0 @ self.V @ r1)
 
 
-def replay_decisions(g):
+def replay_decisions(g, translate=translate):
     r = GameState(g.start_stacks, g.button)
     dealt = [g.hole[0][0], g.hole[1][0], g.hole[0][1], g.hole[1][1], *g.board]
     r.deck = [c for c in r.deck if c not in dealt] + dealt[::-1]

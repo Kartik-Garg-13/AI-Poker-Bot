@@ -212,8 +212,8 @@ class Session:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="models/v2_holdem.npz")
-    ap.add_argument("--search", choices=["off", "river", "turn"], default="turn",
-                    help="re-solve the spot in real time from this street on (turn: ~5s per decision)")
+    ap.add_argument("--search", choices=["off", "river", "turn"], default="off",
+                    help="re-solve the spot in real time from this street on; it beats the bot's own network but loses to other opponents")
     ap.add_argument("--port", type=int, default=8767)
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
